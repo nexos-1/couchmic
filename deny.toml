@@ -1,0 +1,61 @@
+# cargo-deny: license allowlist and supply-chain rules. Run: cargo deny check
+
+[graph]
+all-features = true
+# Only the targets that are built: the release (Windows) and the CI test job (Linux). Without
+# this list, dependencies of other targets would count too.
+targets = [
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+]
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "OpenSSL",
+    "BSL-1.0",
+]
+confidence-threshold = 0.9
+# GPL, LGPL, AGPL and SSPL are not on the list and therefore fail.
+
+[[licenses.clarify]]
+crate = "ring"
+expression = "MIT AND ISC AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[advisories]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+ignore = [
+    # rustls 0.23.44 comes in through rtc/rtc-dtls and is only used there for certificate
+    # verification and as the crypto provider; glass-mic never runs a TLS 1.3 handshake
+    # (ClientConnection/ServerConnection), so the bug is not reachable. The fix 0.23.45 is from
+    # 2026-09-14: update from 2026-09-28 on (14-day rule) and remove this entry.
+    { id = "RUSTSEC-2026-0285", reason = "not reachable in glass-mic; update to rustls 0.23.45 from 2026-09-28" },
+    # proc-macro-error (unmaintained) only hangs off GTK, which tray-icon pulls in on Linux.
+    # glass-mic uses tray-icon on Windows only; cargo-deny filters targets per edge, not per
+    # path, and sees the combination anyway. `cargo tree -i proc-macro-error --target <target>`
+    # is empty for every target above.
+    { id = "RUSTSEC-2024-0370", reason = "only via tray-icon -> gtk on Linux, where tray-icon is never built" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

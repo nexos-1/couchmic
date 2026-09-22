@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Glass Mic">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#F2F2F7">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000">
+<title>Glass Mic</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon-180.png?v=3">
+<link rel="icon" href="/icon-192.png?v=3" type="image/png">
+<style>
+  /* Colors by role, light and dark (iOS system palette as the base).
+     One hue per meaning: tint = interactive, orange = microphone live (like the iOS microphone
+     dot), red = error. Everything else is neutral. */
+  :root {
+    color-scheme: light dark;
+    --bg: #F2F2F7;                    /* systemGroupedBackground */
+    --card: #FFFFFF;                  /* secondarySystemGroupedBackground */
+    --label: #1C1C1E;                 /* 16:1 on card */
+    --label2: #6E6E73;                /* 4.9:1 on card */
+    --label3: #8E8E93;                /* only for 18 pt+ or bold */
+    --sep: rgba(60, 60, 67, .29);
+    --fill: rgba(120, 120, 128, .16);
+    --fill2: rgba(120, 120, 128, .24);
+    --tint: #0A5CE6;                  /* white on it 5.7:1 */
+    --tint-soft: rgba(10, 92, 230, .12);
+    --live: #FF9500;
+    --live-glow: rgba(255, 149, 0, .55);
+    --crit: #FF3B30;
+    --switch-on: #34C759;
+    --glass: rgba(255, 255, 255, .72);
+    --glass-edge: rgba(0, 0, 0, .08);
+    --shadow: 0 10px 30px rgba(0, 0, 0, .12);
+    --ease-out: cubic-bezier(.23, 1, .32, 1);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #000000;
+      --card: #1C1C1E;
+      --label: #FFFFFF;
+      --label2: #A1A1A8;              /* 6.4:1 on card */
+      --label3: #8E8E93;
+      --sep: rgba(84, 84, 88, .6);
+      --fill: rgba(120, 120, 128, .24);
+      --fill2: rgba(120, 120, 128, .32);
+      --tint: #0A84FF;                /* white on it 3.6:1, labels are bold */
+      --tint-soft: rgba(10, 132, 255, .18);
+      --live: #FF9F0A;
+      --live-glow: rgba(255, 159, 10, .5);
+      --crit: #FF453A;
+      --switch-on: #30D158;
+      --glass: rgba(28, 28, 30, .72);
+      --glass-edge: rgba(255, 255, 255, .12);
+      --shadow: 0 10px 30px rgba(0, 0, 0, .5);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #000000; --card: #1C1C1E; --label: #FFFFFF; --label2: #A1A1A8; --label3: #8E8E93;
+    --sep: rgba(84, 84, 88, .6); --fill: rgba(120, 120, 128, .24); --fill2: rgba(120, 120, 128, .32);
+    --tint: #0A84FF; --tint-soft: rgba(10, 132, 255, .18); --live: #FF9F0A; --live-glow: rgba(255, 159, 10, .5);
+    --crit: #FF453A; --switch-on: #30D158; --glass: rgba(28, 28, 30, .72); --glass-edge: rgba(255, 255, 255, .12);
+    --shadow: 0 10px 30px rgba(0, 0, 0, .5);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--label); }
+  body {
+    font: 400 17px/22px -apple-system, system-ui, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased; -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent; overscroll-behavior-y: none;
+  }
+  main {
+    max-width: 592px; margin: 0 auto;
+    padding: max(20px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+             calc(112px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  }
+
+  /* Title: large title, rounded. The only place with a display face besides the state word. */
+  header { padding: 8px 4px 18px; }
+  h1 { margin: 0; font: 700 34px/41px ui-rounded, -apple-system, system-ui, sans-serif; letter-spacing: -.02em; text-wrap: balance; }
+  .host { margin: 2px 0 0; font-size: 13px; line-height: 18px; color: var(--label2); font-variant-numeric: tabular-nums; }
+
+  /* The pane: state and level in one element. The light behind the state word breathes with
+     the voice while sending. */
+  .pane {
+    position: relative; overflow: hidden; isolation: isolate;
+    background: var(--card); border-radius: 22px; padding: 26px 24px 30px; min-height: 140px;
+    display: flex; flex-direction: column; justify-content: center; gap: 6px;
+    --lvl: 0;
+  }
+  .pane .glow {
+    position: absolute; z-index: -1; left: -10%; right: -10%; bottom: -60%; height: 150%;
+    border-radius: 50%;
+    background: radial-gradient(closest-side, var(--live-glow), transparent 72%);
+    opacity: 0; transform: scale(.8); transform-origin: 50% 80%;
+    transition: opacity 90ms linear, transform 90ms linear;
+  }
+  .pane.live .glow { opacity: calc(.18 + var(--lvl) * .82); transform: scale(calc(.85 + var(--lvl) * .35)); }
+  .pane.muted .glow { opacity: .1; transform: scale(.85); }
+  .pane .lvl {
+    position: absolute; left: 24px; right: 24px; bottom: 12px; height: 3px; border-radius: 2px;
+    background: var(--fill);
+  }
+  .pane .lvl > i {
+    display: block; height: 100%; width: 100%; border-radius: 2px; background: var(--live);
+    transform: scaleX(var(--lvl)); transform-origin: left center; transition: transform 60ms linear;
+  }
+  .pane.muted .lvl > i { background: var(--label3); transform: scaleX(0); }
+  .pane .who { display: flex; align-items: center; gap: 10px; }
+  .dot {
+    width: 12px; height: 12px; border-radius: 50%; flex: none;
+    background: var(--label3); transition: background 200ms, box-shadow 200ms;
+  }
+  .dot.live { background: var(--live); box-shadow: 0 0 0 4px color-mix(in srgb, var(--live) 22%, transparent); }
+  .dot.muted { background: transparent; box-shadow: inset 0 0 0 2.5px var(--live); }
+  .dot.crit { background: var(--crit); }
+  .dot.busy { background: transparent; border: 2.5px solid var(--fill2); border-top-color: var(--label2); animation: spin 900ms linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .state { margin: 0; font: 700 28px/34px ui-rounded, -apple-system, system-ui, sans-serif; letter-spacing: -.02em; transition: opacity 160ms var(--ease-out), filter 160ms var(--ease-out); }
+  .state.swap { opacity: 0; filter: blur(2px); transition-duration: 110ms; transition-timing-function: ease-out; }
+  .sub { margin: 0; color: var(--label2); font-size: 15px; line-height: 20px; min-height: 20px; }
+
+  /* Grouped lists like in iOS Settings. */
+  .hdr { margin: 26px 16px 7px; font-size: 13px; line-height: 18px; font-weight: 400; color: var(--label2); text-transform: uppercase; letter-spacing: .04em; }
+  .group { background: var(--card); border-radius: 14px; overflow: hidden; }
+  .row {
+    position: relative; display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    min-height: 44px; padding: 11px 16px;
+  }
+  .row + .row::before { content: ""; position: absolute; left: 16px; right: 0; top: 0; height: .5px; background: var(--sep); }
+  .row .k { flex: none; }
+  .row .v { color: var(--label2); text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .row .v.ok { color: var(--label); }
+
+  /* Advanced: one collapsible section, row with chevron. */
+  details.group > summary { list-style: none; cursor: pointer; }
+  details.group > summary::-webkit-details-marker { display: none; }
+  details.group > summary .row { padding-right: 14px; }
+  .chev { width: 8px; height: 8px; border-right: 2px solid var(--label3); border-bottom: 2px solid var(--label3); transform: rotate(-45deg); transition: transform 200ms var(--ease-out); flex: none; margin-right: 6px; }
+  details[open] .chev { transform: rotate(45deg); }
+  details.group > div > .row:first-child::before { content: ""; position: absolute; left: 16px; right: 0; top: 0; height: .5px; background: var(--sep); }
+
+  /* Switch like UISwitch. */
+  .sw { appearance: none; -webkit-appearance: none; margin: 0; width: 51px; height: 31px; border-radius: 16px; background: var(--fill2); position: relative; flex: none; transition: background 200ms; cursor: pointer; }
+  .sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; box-shadow: 0 3px 8px rgba(0, 0, 0, .15), 0 0 0 .5px rgba(0, 0, 0, .04); transition: transform 200ms var(--ease-out); }
+  .sw:checked { background: var(--switch-on); }
+  .sw:checked::after { transform: translateX(20px); }
+  .sw:focus-visible { outline: 3px solid var(--tint); outline-offset: 2px; }
+  label.row { cursor: pointer; }
+
+  .note { margin: 14px 16px 0; font-size: 13px; line-height: 18px; color: var(--label2); }
+  .note.warn { color: var(--label); }
+  .note.warn:not(:empty)::before { content: attr(data-prefix); font-weight: 600; }
+  .note.err { color: var(--crit); }
+
+  /* Control bar: the only glass surface, floats above the content, within thumb reach. */
+  .bar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; pointer-events: none;
+    padding: 28px max(16px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+    display: flex; justify-content: center;
+    background: linear-gradient(to top, color-mix(in srgb, var(--bg) 92%, transparent) 40%, transparent);
+  }
+  .bar .in {
+    pointer-events: auto; width: min(100%, 560px);
+    display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 8px; border-radius: 24px;
+    background: var(--glass); -webkit-backdrop-filter: blur(24px) saturate(1.4); backdrop-filter: blur(24px) saturate(1.4);
+    box-shadow: var(--shadow), 0 0 0 .5px var(--glass-edge), inset 0 .5px 0 rgba(255, 255, 255, .35);
+  }
+  button {
+    font: 600 17px/22px -apple-system, system-ui, sans-serif; color: var(--label);
+    min-height: 52px; padding: 0 20px; border: 0; border-radius: 17px; background: var(--fill);
+    transition: transform 160ms var(--ease-out), background 200ms, color 200ms; cursor: pointer;
+  }
+  button:active { transform: scale(.97); }
+  button:focus-visible { outline: 3px solid var(--tint); outline-offset: 2px; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--tint); color: #fff; }
+  button.primary.running { background: var(--fill2); color: var(--label); }
+  button.mute { padding: 0 18px; }
+  button.mute[aria-pressed="true"] { background: var(--label); color: var(--card); }
+  @media (hover: hover) and (pointer: fine) {
+    button:not(:disabled):hover { filter: brightness(1.06); }
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .bar .in { background: var(--card); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  }
+  @media (prefers-contrast: more) {
+    .bar .in, .group, .pane { box-shadow: 0 0 0 1px var(--label3); }
+    .row .v { color: var(--label); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pane .glow, .pane .lvl > i, .chev, .sw::after, button, .state { transition: none; }
+    .pane.live .glow { transform: none; opacity: .28; }
+    .dot.busy { animation: none; }
+  }
+  @media (min-width: 700px) {
+    main { padding-top: max(28px, env(safe-area-inset-top)); }
+    .pane { min-height: 156px; padding: 30px 28px 34px; }
+    .state { font-size: 34px; line-height: 40px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Glass Mic</h1>
+    <p class="host" id="host" data-i18n="connecting">Verbindet …</p>
+  </header>
+
+  <section class="pane" id="pane" aria-live="polite">
+    <div class="glow" aria-hidden="true"></div>
+    <div class="who"><span class="dot" id="dot" aria-hidden="true"></span><h2 class="state" id="st" data-i18n="ready">Bereit</h2></div>
+    <p class="sub" id="sub" data-i18n="readySub">Tippe auf „Mikrofon starten“. Danach läuft es weiter, auch im Hintergrund.</p>
+    <div class="lvl" aria-hidden="true"><i id="lvl"></i></div>
+  </section>
+
+  <h3 class="hdr" data-i18n="hdrConnection">Verbindung</h3>
+  <div class="group">
+    <div class="row"><span class="k" data-i18n="path">Pfad</span><span class="v" id="path">–</span></div>
+    <div class="row"><span class="k" data-i18n="latency">Latenz</span><span class="v" id="lat">–</span></div>
+    <div class="row"><span class="k" data-i18n="pcBuffer">PC-Puffer</span><span class="v" id="buf">–</span></div>
+    <div class="row"><span class="k" data-i18n="loss">Verlust</span><span class="v" id="loss">–</span></div>
+    <div class="row"><span class="k" data-i18n="source">Quelle</span><span class="v" id="src">–</span></div>
+  </div>
+
+  <h3 class="hdr" data-i18n="hdrMic">Mikrofon</h3>
+  <div class="group">
+    <label class="row"><span class="k" data-i18n="ec">Echo unterdrücken</span><input class="sw" type="checkbox" id="ec" checked></label>
+    <label class="row"><span class="k" data-i18n="ns">Rauschen unterdrücken</span><input class="sw" type="checkbox" id="ns" checked></label>
+    <label class="row"><span class="k" data-i18n="agc">Automatische Verstärkung</span><input class="sw" type="checkbox" id="agc"></label>
+  </div>
+  <p class="note" data-i18n="remembered">Wird gemerkt. Änderungen gelten ab dem nächsten Start.</p>
+
+  <details class="group" style="margin-top:22px">
+    <summary><div class="row"><span class="k" data-i18n="advanced">Erweitert</span><span class="chev" aria-hidden="true"></span></div></summary>
+    <div>
+      <div class="row"><span class="k" data-i18n="sampleRate">Abtastrate</span><span class="v" id="sr">–</span></div>
+      <div class="row"><span class="k" data-i18n="underruns">Underruns am PC</span><span class="v" id="ur">–</span></div>
+      <div class="row"><span class="k" data-i18n="sentBlocks">Gesendete Blöcke</span><span class="v" id="sent">–</span></div>
+      <div class="row"><span class="k" data-i18n="control">Steuerkanal</span><span class="v" id="ws">–</span></div>
+      <label class="row"><span class="k" data-i18n="forcePcm">PCM-Fallback erzwingen</span><input class="sw" type="checkbox" id="forcepcm"></label>
+    </div>
+  </details>
+
+  <p class="note" data-i18n="homeNote">Zum Home-Bildschirm hinzufügen (Teilen, „Zum Home-Bildschirm“): das Symbol öffnet die Seite in Safari, denn nur ein Safari-Tab darf im Hintergrund weiter aufnehmen, eine eigenständige Web-App friert iOS ein. Solange verbunden, ist „CABLE Output“ das Standard-Mikrofon des PCs, danach kommt das vorige zurück.</p>
+  <p class="note warn" id="warn"></p>
+  <p class="note err" id="err" role="alert"></p>
+</main>
+
+<div class="bar">
+  <div class="in">
+    <button class="primary" id="btn" data-i18n="start">Mikrofon starten</button>
+    <button class="mute" id="mute" aria-pressed="false" disabled data-i18n="mute">Stumm</button>
+  </div>
+</div>
+
+<script>
+// Texts in German and English. The language follows the device; ?lang=de|en forces one (tests).
+const I18N = {
+  de: {
+    connecting: 'Verbindet …', ready: 'Bereit', readySub: 'Tippe auf „Mikrofon starten“. Danach läuft es weiter, auch im Hintergrund.',
+    hdrConnection: 'Verbindung', path: 'Pfad', latency: 'Latenz', pcBuffer: 'PC-Puffer', loss: 'Verlust', source: 'Quelle',
+    hdrMic: 'Mikrofon', ec: 'Echo unterdrücken', ns: 'Rauschen unterdrücken', agc: 'Automatische Verstärkung',
+    remembered: 'Wird gemerkt. Änderungen gelten ab dem nächsten Start.', advanced: 'Erweitert', sampleRate: 'Abtastrate',
+    underruns: 'Underruns am PC', sentBlocks: 'Gesendete Blöcke', control: 'Steuerkanal', forcePcm: 'PCM-Fallback erzwingen',
+    homeNote: 'Zum Home-Bildschirm hinzufügen (Teilen, „Zum Home-Bildschirm“): das Symbol öffnet die Seite in Safari, denn nur ein Safari-Tab darf im Hintergrund weiter aufnehmen, eine eigenständige Web-App friert iOS ein. Solange verbunden, ist „CABLE Output“ das Standard-Mikrofon des PCs, danach kommt das vorige zurück.',
+    start: 'Mikrofon starten', stop: 'Beenden', mute: 'Stumm', notePrefix: 'Hinweis: ',
+    wsConnected: 'Verbunden', wsClosed: 'Getrennt', wsError: 'Fehler', rtt: ' ms hin und zurück', pcSays: 'PC meldet: ',
+    lost: 'Verbindung verloren', retrying: 'Versucht es gleich wieder …', muted: 'Stumm', mutedSub: 'Verbindung steht, es wird Stille gesendet.',
+    sending: 'Sendet', liveRtc: 'Der PC hört zu. Opus, verlusttolerant.', livePcm: 'Der PC hört zu. PCM-Fallback.',
+    noAnswer: 'keine Antwort vom PC', iceTimeout: 'ICE-Timeout', iceFailed: 'ICE fehlgeschlagen',
+    audioInterrupted: 'Audio unterbrochen', reconnecting: 'Verbindet neu …',
+    rtcFailed: (m) => 'WebRTC nicht möglich (' + m + '), es läuft der PCM-Fallback.',
+    testTone: 'Testton 440 Hz', micLabel: 'Mikrofon',
+    bluetooth: 'Bluetooth-Headset erkannt. iOS nutzt dafür das schmalbandige Telefonprofil, die Stimme klingt dumpf. Besser das iPad-Mikrofon oder ein Kabel-Headset nutzen.',
+    tapToStart: 'Tippen zum Starten', tapAudio: 'Der Browser gibt Audio erst nach einer Berührung frei.', tapMic: 'Die Mikrofon-Freigabe braucht eine Berührung.',
+    micDenied: (m) => 'Mikrofon-Zugriff verweigert (' + m + '). In den Einstellungen unter Safari, Mikrofon den Zugriff erlauben.',
+    noMic: 'Kein Mikrofon', noMicSub: 'Zugriff in den Safari-Einstellungen erlauben.',
+    connectingState: 'Verbinde …', searching: 'Sucht den PC im Tailnet.',
+    unreachable: 'PC nicht erreichbar', unreachableSub: 'Ist Tailscale auf dem iPad verbunden und läuft Glass Mic am PC?',
+    bufferTarget: (b, t) => b + ' ms, Ziel ' + t + ' ms',
+    stopped: 'Beendet', stoppedSub: 'Das vorige PC-Mikrofon ist in ein paar Sekunden wieder aktiv.',
+    insecure: 'Keine sichere Verbindung (HTTPS nötig), der Mikrofon-Zugriff wird blockiert.',
+    otherTabStill: 'Die Aufnahme im anderen Tab läuft noch, bitte dort beenden.', stoppedInSafari: 'Das Mikrofon in Safari wurde beendet. Dieser Tab kann zu.',
+    alreadyRunning: 'Läuft bereits', alreadyRunningSub: 'Ein anderer Safari-Tab sendet schon. Dieser Tab kann zu.',
+    startFailed: 'Start fehlgeschlagen: ',
+  },
+  en: {
+    connecting: 'Connecting …', ready: 'Ready', readySub: 'Tap “Start microphone”. It keeps running afterwards, also in the background.',
+    hdrConnection: 'Connection', path: 'Path', latency: 'Latency', pcBuffer: 'PC buffer', loss: 'Loss', source: 'Source',
+    hdrMic: 'Microphone', ec: 'Echo cancellation', ns: 'Noise suppression', agc: 'Automatic gain',
+    remembered: 'Remembered. Changes apply from the next start.', advanced: 'Advanced', sampleRate: 'Sample rate',
+    underruns: 'Underruns on the PC', sentBlocks: 'Blocks sent', control: 'Control channel', forcePcm: 'Force PCM fallback',
+    homeNote: 'Add to Home Screen (Share, “Add to Home Screen”): the icon opens the page in Safari, because only a Safari tab may keep recording in the background; iOS freezes a standalone web app. While connected, “CABLE Output” is the default microphone of the PC, afterwards the previous one comes back.',
+    start: 'Start microphone', stop: 'Stop', mute: 'Mute', notePrefix: 'Note: ',
+    wsConnected: 'Connected', wsClosed: 'Disconnected', wsError: 'Error', rtt: ' ms round trip', pcSays: 'PC says: ',
+    lost: 'Connection lost', retrying: 'Retrying in a moment …', muted: 'Muted', mutedSub: 'Still connected, sending silence.',
+    sending: 'Sending', liveRtc: 'The PC is listening. Opus, loss tolerant.', livePcm: 'The PC is listening. PCM fallback.',
+    noAnswer: 'no answer from the PC', iceTimeout: 'ICE timeout', iceFailed: 'ICE failed',
+    audioInterrupted: 'Audio interrupted', reconnecting: 'Reconnecting …',
+    rtcFailed: (m) => 'WebRTC not possible (' + m + '), using the PCM fallback.',
+    testTone: 'Test tone 440 Hz', micLabel: 'Microphone',
+    bluetooth: 'Bluetooth headset detected. iOS uses the narrowband phone profile for it, the voice sounds muffled. Better use the iPad microphone or a wired headset.',
+    tapToStart: 'Tap to start', tapAudio: 'The browser only allows audio after a touch.', tapMic: 'Microphone access needs a touch.',
+    micDenied: (m) => 'Microphone access denied (' + m + '). Allow it in Settings, Safari, Microphone.',
+    noMic: 'No microphone', noMicSub: 'Allow access in the Safari settings.',
+    connectingState: 'Connecting …', searching: 'Looking for the PC in the tailnet.',
+    unreachable: 'PC not reachable', unreachableSub: 'Is Tailscale connected on the iPad and is glass-mic running on the PC?',
+    bufferTarget: (b, t) => b + ' ms, target ' + t + ' ms',
+    stopped: 'Stopped', stoppedSub: 'The previous PC microphone is active again in a few seconds.',
+    insecure: 'No secure connection (HTTPS required), microphone access is blocked.',
+    otherTabStill: 'The recording in the other tab is still running, please stop it there.', stoppedInSafari: 'The microphone in Safari was stopped. You can close this tab.',
+    alreadyRunning: 'Already running', alreadyRunningSub: 'Another Safari tab is already sending. You can close this tab.',
+    startFailed: 'Start failed: ',
+  },
+};
+const LANG = (() => {
+  const forced = new URLSearchParams(location.search).get('lang');
+  if (forced === 'de' || forced === 'en') return forced;
+  return (navigator.language || 'en').toLowerCase().startsWith('de') ? 'de' : 'en';
+})();
+const L = I18N[LANG];
+const LOCALE = LANG === 'de' ? 'de-DE' : 'en-US';
+document.documentElement.lang = LANG;
+document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = L[el.dataset.i18n]; });
+document.getElementById('warn').dataset.prefix = L.notePrefix;
+const $ = id => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+// Tests only: ?appearance=light|dark forces an appearance. Without it the page follows the
+// system, the way Apple expects it for apps.
+if (params.get('appearance')) document.documentElement.dataset.theme = params.get('appearance');
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+let ctx, ws, node, stream, pc, running = false, muted = false, seq = 0, sent = 0, statsTimer, pingTimer, latency = null, path = '-';
+let wsReady = false, pendingOffer = null;
+
+const workletCode = `
+class MicSender extends AudioWorkletProcessor {
+  constructor() { super(); this.buf = new Int16Array(480); this.n = 0; }
+  process(inputs) {
+    const ch = inputs[0] && inputs[0][0];
+    if (!ch) return true;
+    for (let i = 0; i < ch.length; i++) {
+      let v = Math.max(-1, Math.min(1, ch[i]));
+      this.buf[this.n++] = v < 0 ? v * 32768 : v * 32767;
+      if (this.n === this.buf.length) { this.port.postMessage(this.buf.buffer.slice(0)); this.n = 0; }
+    }
+    return true;
+  }
+}
+registerProcessor('mic-sender', MicSender);`;
+
+// Telemetry: what the device does in the background goes into the PC log only (not /api/stats).
+const telQueue = [];
+function tel(ev, extra) {
+  const m = Object.assign({ type: 'log', ev, t: Date.now(), vis: document.visibilityState, standalone: isStandalone(), ctx: ctx ? ctx.state : '-', running, path }, extra || {});
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); else if (telQueue.length < 50) telQueue.push(m);
+}
+function flushTel() { while (telQueue.length && ws && ws.readyState === 1) ws.send(JSON.stringify(telQueue.shift())); }
+document.addEventListener('visibilitychange', () => tel('visibility'));
+window.addEventListener('pagehide', () => tel('pagehide'));
+window.addEventListener('pageshow', () => tel('pageshow'));
+window.addEventListener('blur', () => tel('blur'));
+window.addEventListener('focus', () => tel('focus'));
+document.addEventListener('freeze', () => tel('freeze'));
+document.addEventListener('resume', () => tel('resume'));
+function watchTrack(t) { ['mute', 'unmute', 'ended'].forEach(e => t.addEventListener(e, () => tel('track-' + e, { enabled: t.enabled, ready: t.readyState, muted: t.muted }))); }
+
+function wsUrl() { return (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/ws'; }
+
+// State: word, subline, dot. Classes: '' ready/stopped, 'live' sending, 'muted' muted,
+// 'busy' connecting, 'crit' error. The word crossfades briefly (a blur hides the switch).
+let swapTimer = null, pendingStatus = null;
+function setStatus(text, sub, cls) {
+  const st = $('st');
+  pendingStatus = { text, sub };
+  const apply = () => { st.textContent = pendingStatus.text; if (pendingStatus.sub !== undefined) $('sub').textContent = pendingStatus.sub; };
+  clearTimeout(swapTimer);
+  if (reduceMotion || st.textContent === text) { apply(); st.classList.remove('swap'); }
+  else {
+    // Fade out briefly (with a slight blur), swap the text, fade in. Overtaking calls only
+    // replace the pending text, the animation runs once.
+    st.classList.add('swap');
+    // No requestAnimationFrame: it pauses in background tabs and would leave the word blurred.
+    swapTimer = setTimeout(() => { apply(); setTimeout(() => st.classList.remove('swap'), 20); }, 120);
+  }
+  $('dot').className = 'dot ' + (cls || '');
+  const pane = $('pane');
+  pane.classList.toggle('live', cls === 'live');
+  pane.classList.toggle('muted', cls === 'muted');
+  if (cls !== 'live') pane.style.setProperty('--lvl', 0);
+}
+function beep(f, ms) { try { const c = new (window.AudioContext || window.webkitAudioContext)(); const o = c.createOscillator(); const g = c.createGain(); o.frequency.value = f; g.gain.value = 0.08; o.connect(g); g.connect(c.destination); o.start(); o.stop(c.currentTime + ms / 1000); setTimeout(() => c.close(), ms + 50); } catch {} }
+function liveText() { return path === 'WebRTC' ? L.liveRtc : L.livePcm; }
+
+// ---------- Signaling / control channel ----------
+function openWs() {
+  return new Promise((resolve) => {
+    ws = new WebSocket(wsUrl()); ws.binaryType = 'arraybuffer';
+    ws.onopen = () => { wsReady = true; $('ws').textContent = L.wsConnected; ws.send(JSON.stringify({ type: 'hello', ua: navigator.userAgent, standalone: isStandalone() })); flushTel(); resolve(true); };
+    ws.onmessage = (ev) => { if (typeof ev.data !== 'string') return; let m; try { m = JSON.parse(ev.data); } catch { return; }
+      if (m.type === 'welcome') { $('host').textContent = (m.host || 'PC') + ' · ' + location.host; }
+      if (m.type === 'pong') { latency = (performance.now() - m.t); $('lat').textContent = latency.toFixed(0) + L.rtt; }
+      if (m.type === 'answer' && pendingOffer) { pendingOffer(m.sdp); pendingOffer = null; }
+      if (m.type === 'error') { $('err').textContent = L.pcSays + m.message; if (pendingOffer) { pendingOffer(null); pendingOffer = null; } }
+    };
+    ws.onclose = (e) => { wsReady = false; $('ws').textContent = L.wsClosed; tel('ws-close', { code: e.code, reason: e.reason }); if (running) { setStatus(L.lost, L.retrying, 'busy'); setTimeout(() => { if (running) reconnect(); }, 1000); } };
+    ws.onerror = () => { $('ws').textContent = L.wsError; resolve(false); };
+  });
+}
+
+async function reconnect() {
+  const ok = await openWs();
+  if (!ok || !running) return;
+  if (pc) { try { pc.close(); } catch {} pc = null; }
+  const okRtc = await startRtc();
+  if (!okRtc) startPcmPath();
+  setStatus(muted ? L.muted : L.sending, muted ? L.mutedSub : liveText(), muted ? 'muted' : 'live');
+}
+
+// ---------- Path A: WebRTC (Opus, UDP) ----------
+async function startRtc() {
+  if ($('forcepcm').checked || !window.RTCPeerConnection) return false;
+  try {
+    pc = new RTCPeerConnection({ iceServers: [] });
+    const track = stream.getAudioTracks()[0];
+    pc.addTrack(track, stream);
+    // Opus: 48 kHz, mono, FEC on, small frames. Safari honours minptime/useinbandfec in the SDP.
+    let offer = await pc.createOffer({ offerToReceiveAudio: false, offerToReceiveVideo: false });
+    offer.sdp = offer.sdp.replace(/a=fmtp:(\d+) ([^\r\n]*)/g, (m, pt, rest) => rest.includes('useinbandfec') ? `a=fmtp:${pt} ${rest};stereo=0;maxaveragebitrate=64000` : m);
+    await pc.setLocalDescription(offer);
+    await new Promise((res) => { if (pc.iceGatheringState === 'complete') return res(); const t = setTimeout(res, 2500); pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); res(); } }); });
+    const answerSdp = await new Promise((res) => { pendingOffer = res; ws.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription.sdp })); setTimeout(() => { if (pendingOffer) { pendingOffer = null; res(null); } }, 6000); });
+    if (!answerSdp) throw new Error(L.noAnswer);
+    await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+    await new Promise((res, rej) => { const t = setTimeout(() => rej(new Error(L.iceTimeout)), 8000); pc.addEventListener('connectionstatechange', () => { if (pc.connectionState === 'connected') { clearTimeout(t); res(); } if (pc.connectionState === 'failed') { clearTimeout(t); rej(new Error(L.iceFailed)); } }); });
+    path = 'WebRTC'; $('path').textContent = 'WebRTC, Opus'; $('sr').textContent = (48000).toLocaleString(LOCALE) + ' Hz';
+    pc.addEventListener('connectionstatechange', () => { tel('pc', { state: pc.connectionState, ice: pc.iceConnectionState }); if (!running) return; if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') { setStatus(L.audioInterrupted, L.reconnecting, 'busy'); setTimeout(() => { if (running) reconnect(); }, 800); } });
+    return true;
+  } catch (e) {
+    $('warn').textContent = L.rtcFailed(e.message);
+    try { pc && pc.close(); } catch {} pc = null;
+    return false;
+  }
+}
+
+// ---------- Path B: PCM over WebSocket ----------
+function startPcmPath() {
+  path = 'PCM'; $('path').textContent = 'PCM, WebSocket'; $('sr').textContent = ctx.sampleRate.toLocaleString(LOCALE) + ' Hz';
+  if (!node) {
+    node = new AudioWorkletNode(ctx, 'mic-sender', { numberOfInputs: 1, numberOfOutputs: 0, channelCount: 1 });
+    ctx._src.connect(node);
+    node.port.onmessage = (ev) => {
+      if (!ws || ws.readyState !== 1 || path !== 'PCM' || muted) return;
+      const pcm = new Uint8Array(ev.data); const frame = new Uint8Array(8 + pcm.length); const dv = new DataView(frame.buffer);
+      dv.setUint32(0, ctx.sampleRate, true); dv.setUint16(4, 1, true); dv.setUint16(6, seq++ & 0xffff, true); frame.set(pcm, 8);
+      ws.send(frame.buffer); sent++;
+    };
+  }
+}
+
+// Show the source (microphone label) and warn about Bluetooth headsets: iOS then switches to the
+// narrowband HFP profile (8 to 16 kHz, muffled). Detected by label or sample rate.
+function describeSource() {
+  try {
+    const t = stream.getAudioTracks()[0]; if (!t) return;
+    const st = t.getSettings ? t.getSettings() : {};
+    const label = t.label || (params.get('tone') === '1' ? L.testTone : L.micLabel);
+    $('src').textContent = label;
+    const bt = /bluetooth|airpods|headset|hfp|buds|beats/i.test(label) || (st.sampleRate && st.sampleRate <= 16000);
+    $('warn').textContent = bt ? L.bluetooth : '';
+  } catch {}
+}
+
+// ---------- Start / Stop / Mute ----------
+// Browsers only allow audio after a touch. Instead of waiting forever on resume(): try briefly,
+// otherwise wait for the next touch and continue.
+function waitForGesture() {
+  return new Promise((res) => {
+    const evs = ['pointerdown', 'touchend', 'keydown'];
+    const h = () => { evs.forEach(e => document.removeEventListener(e, h)); res(); };
+    evs.forEach(e => document.addEventListener(e, h, { once: true }));
+  });
+}
+async function ensureAudioUnlocked() {
+  for (let i = 0; i < 20; i++) {
+    try { await Promise.race([ctx.resume(), new Promise(r => setTimeout(r, 700))]); } catch {}
+    if (ctx.state === 'running') return;
+    setStatus(L.tapToStart, L.tapAudio, 'busy');
+    await waitForGesture();
+  }
+}
+
+let starting = false;
+async function start() {
+  if (starting || running) return;
+  starting = true;
+  try { await startInner(); } finally { starting = false; }
+}
+async function startInner() {
+  $('err').textContent = ''; $('warn').textContent = '';
+  ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000, latencyHint: 'interactive' });
+  await ensureAudioUnlocked();
+  if (params.get('tone') === '1') {
+    // Test mode without a microphone: 440 Hz tone as the track (for automated tests).
+    const osc = ctx.createOscillator(); osc.frequency.value = 440; const g = ctx.createGain(); g.gain.value = 0.3;
+    const dest = ctx.createMediaStreamDestination(); osc.connect(g); g.connect(dest); osc.start(); stream = dest.stream;
+  } else {
+    const constraints = { audio: { echoCancellation: $('ec').checked, noiseSuppression: $('ns').checked, autoGainControl: $('agc').checked, channelCount: 1 }, video: false };
+    for (let attempt = 0; ; attempt++) {
+      try { stream = await navigator.mediaDevices.getUserMedia(constraints); break; }
+      catch (e) {
+        // Autostart without a touch: Safari wants a gesture. Wait for one tap once, then retry.
+        if (attempt === 0 && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) { setStatus(L.tapToStart, L.tapMic, 'busy'); await waitForGesture(); continue; }
+        $('err').textContent = L.micDenied(e.message); setStatus(L.noMic, L.noMicSub, 'crit'); try { ctx.close(); } catch {} return;
+      }
+    }
+  }
+  const blob = new Blob([workletCode], { type: 'application/javascript' });
+  await ctx.audioWorklet.addModule(URL.createObjectURL(blob));
+  describeSource();
+  stream.getAudioTracks().forEach(watchTrack);
+  ctx.onstatechange = () => tel('ctx', { state: ctx.state });
+  // Keep-alive: a practically silent output keeps the iOS audio session (playback plus recording)
+  // active, so the page is not frozen in the background.
+  try { const ka = ctx.createOscillator(); const kg = ctx.createGain(); kg.gain.value = 0.0002; ka.frequency.value = 30; ka.connect(kg); kg.connect(ctx.destination); ka.start(); ctx._keepalive = ka; } catch {}
+  tel('start', { ua: navigator.userAgent });
+  ctx._src = ctx.createMediaStreamSource(stream);
+  const analyser = ctx.createAnalyser(); analyser.fftSize = 512; ctx._src.connect(analyser);
+  running = true; muted = false; $('mute').disabled = false; $('mute').setAttribute('aria-pressed', 'false');
+  setStatus(L.connectingState, L.searching, 'busy');
+  $('btn').textContent = L.stop; $('btn').classList.add('running');
+  const ok = await openWs();
+  if (!ok) { setStatus(L.unreachable, L.unreachableSub, 'crit'); return; }
+  const okRtc = await startRtc();
+  if (!okRtc) startPcmPath();
+  setStatus(L.sending, liveText(), 'live'); beep(880, 90);
+  try { localStorage.setItem('glassmic.autostart', '1'); } catch {}
+
+  // Level: fast attack, slow release, as a CSS variable on the pane (transform/opacity only).
+  const data = new Uint8Array(analyser.fftSize); let lvl = 0;
+  const meter = () => { if (!running) return; analyser.getByteTimeDomainData(data); let peak = 0; for (const v of data) peak = Math.max(peak, Math.abs(v - 128)); const target = Math.min(1, peak / 128 * 1.6); lvl = target > lvl ? target : lvl * 0.88; $('pane').style.setProperty('--lvl', (muted ? 0 : lvl).toFixed(3)); requestAnimationFrame(meter); };
+  requestAnimationFrame(meter);
+  pingTimer = setInterval(() => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping', t: performance.now() })); }, 2000);
+  statsTimer = setInterval(async () => {
+    $('sent').textContent = path === 'PCM' ? sent.toLocaleString(LOCALE) : '–';
+    try { const r = await fetch('/api/stats'); const s = await r.json(); $('buf').textContent = L.bufferTarget(s.buffered_ms.toFixed(0), (s.target_ms || 0).toFixed(0)); $('ur').textContent = s.underruns;
+      if (path === 'WebRTC') { const l = s.rtc.lost, p = s.rtc.packets; const el = $('loss'); if ((p + l) > 0) { const pct = (l / (p + l)) * 100; el.textContent = pct.toLocaleString(LOCALE, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' %' + (l > 0 ? ' (FEC ' + s.rtc.fec_recovered + ', PLC ' + s.rtc.plc_frames + ')' : ''); el.classList.toggle('ok', pct < 1); } else { el.textContent = '0 %'; } } else { $('loss').textContent = '–'; } } catch {}
+  }, 1000);
+}
+
+function stop() {
+  running = false; clearInterval(statsTimer); clearInterval(pingTimer);
+  try { pc && pc.close(); } catch {} pc = null;
+  try { ws && ws.close(); } catch {}
+  try { node && node.disconnect(); } catch {} node = null;
+  try { stream && stream.getTracks().forEach(t => t.stop()); } catch {}
+  try { ctx && ctx.close(); } catch {}
+  ['src', 'path', 'lat', 'buf', 'loss'].forEach(id => { $(id).textContent = '–'; $(id).classList.remove('ok'); }); $('warn').textContent = '';
+  $('btn').textContent = L.start; $('btn').classList.remove('running'); $('mute').disabled = true; $('mute').setAttribute('aria-pressed', 'false'); muted = false;
+  setStatus(L.stopped, L.stoppedSub, ''); beep(440, 90);
+}
+
+function toggleMute() {
+  muted = !muted;
+  try { stream.getAudioTracks().forEach(t => { t.enabled = !muted; }); } catch {}
+  $('mute').setAttribute('aria-pressed', muted ? 'true' : 'false');
+  setStatus(muted ? L.muted : L.sending, muted ? L.mutedSub : liveText(), muted ? 'muted' : 'live');
+}
+
+function isStandalone() { return window.navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches); }
+
+// Remember the switches: read from localStorage on load, save on every change.
+for (const id of ['ec', 'ns', 'agc', 'forcepcm']) {
+  try { const v = localStorage.getItem('glassmic.' + id); if (v !== null) $(id).checked = v === '1'; } catch {}
+  $(id).addEventListener('change', () => { try { localStorage.setItem('glassmic.' + id, $(id).checked ? '1' : '0'); } catch {} });
+}
+$('btn').onclick = () => running ? stop() : start().catch(e => { $('err').textContent = L.startFailed + e.message; });
+$('mute').onclick = toggleMute;
+window.addEventListener('online', () => { if (running && (!ws || ws.readyState !== 1)) reconnect(); });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && running && (!ws || ws.readyState !== 1)) reconnect(); });
+if (!window.isSecureContext) $('err').textContent = L.insecure;
+$('host').textContent = location.host;
+
+// Between tabs: a running tab answers "ping" with "alive" and stops on "stop". This lets a
+// Shortcuts automation with ?stop=1 stop the microphone, and ?autostart=1 does not start a
+// second recording while a tab is already sending.
+const bus = ('BroadcastChannel' in window) ? new BroadcastChannel('glassmic') : null;
+if (bus) bus.onmessage = (ev) => {
+  const m = ev.data || {};
+  if (m.type === 'ping' && running) bus.postMessage({ type: 'alive' });
+  if (m.type === 'stop' && running) { stop(); tel('stop-by-command'); }
+};
+function otherTabRunning() {
+  return new Promise((res) => {
+    if (!bus) return res(false);
+    const done = (v) => { clearTimeout(t); bus.removeEventListener('message', h); res(v); };
+    const h = (ev) => { if (ev.data && ev.data.type === 'alive') done(true); };
+    bus.addEventListener('message', h);
+    const t = setTimeout(() => done(false), 400);
+    bus.postMessage({ type: 'ping' });
+  });
+}
+
+(async () => {
+  if (params.get('stop') === '1') {
+    if (bus) bus.postMessage({ type: 'stop' });
+    const was = await otherTabRunning();
+    setStatus(L.stopped, was ? L.otherTabStill : L.stoppedInSafari, '');
+    return;
+  }
+  let wantAuto = false; try { wantAuto = localStorage.getItem('glassmic.autostart') === '1'; } catch {}
+  if ((params.get('autostart') === '1' || isStandalone()) && wantAuto && window.isSecureContext) {
+    if (await otherTabRunning()) { setStatus(L.alreadyRunning, L.alreadyRunningSub, 'live'); $('btn').disabled = true; return; }
+    start().catch(() => {});
+  }
+})();
+</script>
+</body>
+</html>

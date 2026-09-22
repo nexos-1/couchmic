@@ -1,0 +1,78 @@
+name: release
+
+# A tag v<version> builds the release zip and creates a draft GitHub release (review and publish
+# it by hand). "Run workflow" builds the same zip as an artifact only.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: windows-2025
+    permissions:
+      contents: write # create the draft release
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, 2026-07-16
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2, 2026-08-06
+
+      - name: Version
+        id: version
+        shell: pwsh
+        run: |
+          $meta = cargo metadata --format-version 1 --no-deps | ConvertFrom-Json
+          $version = $meta.packages[0].version
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$version") {
+            throw "tag $env:GITHUB_REF_NAME does not match Cargo.toml version $version"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+
+      # cargo-about 0.9.2 (2026-08-18) writes the third-party license notices for the binary.
+      - name: Third-party licenses
+        run: |
+          cargo install cargo-about --version 0.9.2 --locked --features cli
+          cargo about generate about.hbs -o THIRD-PARTY-LICENSES.html
+
+      - name: Package
+        id: package
+        shell: pwsh
+        run: |
+          $name = "glass-mic-${{ steps.version.outputs.version }}-windows-x64"
+          $dir = "dist/$name"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item target/release/glass-mic.exe, install.ps1, README.md, README.de.md, LICENSE, CHANGELOG.md, THIRD-PARTY-LICENSES.html $dir
+          Compress-Archive -Path "$dir/*" -DestinationPath "dist/$name.zip" -Force
+          $hash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower()
+          $exeHash = (Get-FileHash "$dir/glass-mic.exe" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $name.zip`n$exeHash  glass-mic.exe" | Set-Content -Encoding ascii "dist/$name.sha256"
+          Get-Content "dist/$name.sha256"
+          "name=$name" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1, 2026-04-10
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: |
+            dist/${{ steps.package.outputs.name }}.zip
+            dist/${{ steps.package.outputs.name }}.sha256
+
+      - name: Draft release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $name = "${{ steps.package.outputs.name }}"
+          $notes = "See CHANGELOG.md. SHA-256:`n`n``````n$(Get-Content dist/$name.sha256 -Raw)``````"
+          gh release create $env:GITHUB_REF_NAME "dist/$name.zip" "dist/$name.sha256" --draft --title "glass-mic $env:GITHUB_REF_NAME" --notes $notes

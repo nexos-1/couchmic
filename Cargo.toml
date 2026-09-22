@@ -1,0 +1,74 @@
+[package]
+name = "glass-mic"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+description = "Use your iPad or iPhone microphone as a Windows microphone: Safari sends audio over WebRTC (Tailscale), glass-mic plays it into VB-CABLE."
+repository = "https://github.com/nexos-1/glass-mic"
+readme = "README.md"
+keywords = ["microphone", "webrtc", "ipad", "vb-cable", "tailscale"]
+categories = ["multimedia::audio"]
+publish = false
+
+[[bin]]
+name = "glass-mic"
+path = "src/main.rs"
+
+# Supply chain: every version below was at least 14 days old when it was pinned.
+
+# Platform independent: access control (access.rs), jitter buffer (audio.rs), CLI and server.
+[dependencies]
+axum = { version = "0.8.9", features = ["ws"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+serde_json = "1.0.151"
+clap = { version = "4.6.6", features = ["derive"] }
+# Windowed sinc resampler (5.0.0, 2026-08-10)
+rubato = "5.0.0"
+
+# Windows only: audio output, WebRTC, tray, COM. These crates are not built on Linux/macOS
+# (cpal needs ALSA headers there, tray-icon needs GTK), which keeps CI and cargo-deny clean.
+[target.'cfg(windows)'.dependencies]
+# cpal 0.18.2 (2026-08-16)
+cpal = "0.18.2"
+# WebRTC receiver (Opus audio track from Safari). webrtc/rtc pinned to 0.20.3 (2026-08-16).
+webrtc = "=0.20.3"
+rtc = "=0.20.3"
+# libopus bindings (opus 0.4.0, 2026-08-23; libopus is BSD-3-Clause), needs CMake to build
+opus = "0.4.0"
+# Tray, menu, toasts (0.24.2 / 0.19.3 / 0.8.1)
+tray-icon = "0.24.2"
+muda = "0.19.3"
+tauri-winrt-notification = "0.8.1"
+# Direct COM calls (IPolicyConfig, IMMDeviceEnumerator), registry for the toast app id,
+# UI language; 0.62.2 (2025-10-06)
+windows = { version = "0.62.2", features = [
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_System_Variant",
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Threading",
+    "Win32_System_Console",
+    "Win32_System_Registry",
+    "Win32_Security",
+    "Win32_Globalization",
+    "Win32_Storage_FileSystem",
+] }
+# windows-core is required by the #[interface] macro (IPolicyConfig)
+windows-core = "0.62.2"
+# async-trait 0.1.92 (2026-08-08), for the PeerConnectionEventHandler
+async-trait = "0.1.92"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+debug = 1
+
+[profile.dev]
+opt-level = 1
