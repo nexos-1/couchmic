@@ -36,12 +36,12 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
 ignore = [
     # rustls 0.23.44 comes in through rtc/rtc-dtls and is only used there for certificate
-    # verification and as the crypto provider; glass-mic never runs a TLS 1.3 handshake
+    # verification and as the crypto provider; CouchMic never runs a TLS 1.3 handshake
     # (ClientConnection/ServerConnection), so the bug is not reachable. The fix 0.23.45 is from
     # 2026-09-14: update from 2026-09-28 on (14-day rule) and remove this entry.
-    { id = "RUSTSEC-2026-0285", reason = "not reachable in glass-mic; update to rustls 0.23.45 from 2026-09-28" },
+    { id = "RUSTSEC-2026-0285", reason = "not reachable in CouchMic; update to rustls 0.23.45 from 2026-09-28" },
     # proc-macro-error (unmaintained) only hangs off GTK, which tray-icon pulls in on Linux.
-    # glass-mic uses tray-icon on Windows only; cargo-deny filters targets per edge, not per
+    # CouchMic uses tray-icon on Windows only; cargo-deny filters targets per edge, not per
     # path, and sees the combination anyway. `cargo tree -i proc-macro-error --target <target>`
     # is empty for every target above.
     { id = "RUSTSEC-2024-0370", reason = "only via tray-icon -> gtk on Linux, where tray-icon is never built" },

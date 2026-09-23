@@ -1,8 +1,8 @@
-# glass-mic
+# CouchMic
 
 Use your iPad or iPhone as a microphone for your Windows PC. No app to install on the iPad:
 Safari sends the microphone over WebRTC through your [Tailscale](https://tailscale.com) network,
-glass-mic plays it into [VB-CABLE](https://vb-audio.com/Cable/), and every Windows app can use
+CouchMic plays it into [VB-CABLE](https://vb-audio.com/Cable/), and every Windows app can use
 "CABLE Output" as its microphone.
 
 Built for remote desktop setups (Moonlight/Sunshine, Jump Desktop, Parsec) where the iPad is the
@@ -13,7 +13,7 @@ screen and keyboard, but the PC has no microphone of its own or it is in another
 ```
 iPad / iPhone (Safari)                          Windows PC
 +----------------------+   Tailscale (WireGuard)  +--------------------------------------+
-| getUserMedia         |  WebRTC, Opus, UDP 8322  | glass-mic.exe                        |
+| getUserMedia         |  WebRTC, Opus, UDP 8322  | couchmic.exe                         |
 | echo/noise cancel    | -----------------------> |  Opus decode, FEC/PLC, jitter buffer |
 | web page from the PC | <---- HTTPS (signaling)  |  -> "CABLE Input" (VB-CABLE)         |
 +----------------------+   tailscale serve :443   |  -> "CABLE Output" = microphone      |
@@ -44,14 +44,14 @@ iPad / iPhone (Safari)                          Windows PC
 
 ## Install
 
-1. Download `glass-mic-<version>-windows-x64.zip` from the
-   [releases](https://github.com/nexos-1/glass-mic/releases) and unzip it.
+1. Download `couchmic-<version>-windows-x64.zip` from the
+   [releases](https://github.com/nexos-1/couchmic/releases) and unzip it.
 2. Open PowerShell in that folder and run:
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\install.ps1
    ```
-   The script checks for VB-CABLE, copies glass-mic to `%LOCALAPPDATA%\GlassMic`, adds a firewall
-   rule for UDP 8322 (one admin prompt), registers a scheduled task that starts glass-mic at logon
+   The script checks for VB-CABLE, copies CouchMic to `%LOCALAPPDATA%\CouchMic`, adds a firewall
+   rule for UDP 8322 (one admin prompt), registers a scheduled task that starts CouchMic at logon
    and restarts it if needed, and runs `tailscale serve`. At the end it prints the address for
    the iPad, e.g. `https://my-pc.tail1234.ts.net/`.
 3. On the iPad: open that address in Safari, tap **Start microphone**, allow microphone access.
@@ -76,12 +76,12 @@ The binary is not code-signed yet, so Windows SmartScreen may warn on first star
 - The **Advanced** section on the page shows path, latency, buffer, loss and underruns.
 - Test without speaking: `https://<pc>.<tailnet>.ts.net/?tone=1` sends a 440 Hz tone.
 - Tray menu: status, "Switch default microphone automatically" (on/off), open web page, open log
-  folder, quit. After "Quit" the watchdog leaves glass-mic stopped until you sign out, restart
-  or shut down Windows (or until you start `glass-mic.exe` by hand).
+  folder, quit. After "Quit" the watchdog leaves CouchMic stopped until you sign out, restart
+  or shut down Windows (or until you start `couchmic.exe` by hand).
 
 ## Command line
 
-`glass-mic.exe --help` lists all options. The most useful:
+`couchmic.exe --help` lists all options. The most useful:
 
 | Option | Default | Meaning |
 | --- | --- | --- |
@@ -98,7 +98,7 @@ The binary is not code-signed yet, so Windows SmartScreen may warn on first star
 | `--list` | | List output devices |
 | `--restore-mic` | | Restore the previous default microphone after a crash, then exit |
 
-Logs: `%LOCALAPPDATA%\GlassMic\glass-mic.log` (the tray menu opens the folder).
+Logs: `%LOCALAPPDATA%\CouchMic\couchmic.log` (the tray menu opens the folder).
 
 ## Integrations
 
@@ -116,9 +116,9 @@ does exactly that. The WebSocket protocol is documented in [docs/PROTOCOL.md](do
   users of a shared tailnet and tagged devices are rejected; `--allow-any-tailnet-user`
   turns this off.
 - **Tailscale Funnel is always rejected.** Funnel works per port, so turning it on for port 443
-  for anything else would otherwise publish glass-mic to the internet; `install.ps1` also refuses
+  for anything else would otherwise publish CouchMic to the internet; `install.ps1` also refuses
   to set up while Funnel is on for that port.
-- Browsers must come from the glass-mic page itself: host allowlist (against DNS rebinding),
+- Browsers must come from the CouchMic page itself: host allowlist (against DNS rebinding),
   origin check (against cross-site WebSockets), `Sec-Fetch-Site` (against links and embeds from
   other sites) and `frame-ancestors 'none'` (the page cannot be framed). Rejected requests get
   403 and a rate-limited warning in the log.
@@ -137,8 +137,8 @@ Report security issues as described in [SECURITY.md](SECURITY.md).
 
 ## Troubleshooting
 
-- **White page on the iPad:** glass-mic is not running (tailscale serve answers 502). The
-  scheduled task restarts it within 5 minutes; or start the "GlassMic" task manually.
+- **White page on the iPad:** CouchMic is not running (tailscale serve answers 502). The
+  scheduled task restarts it within 5 minutes; or start the "CouchMic" task manually.
 - **"PC not reachable":** Tailscale disconnected on the iPad, or HTTPS certificates are not
   enabled in the Tailscale admin console.
 - **Path shows "PCM" instead of "WebRTC":** UDP 8322 is blocked (firewall rule missing or a
@@ -154,7 +154,7 @@ Needs Rust 1.95 (see `rust-toolchain.toml`) and CMake (for libopus):
 
 ```powershell
 cargo build --release
-.\install.ps1   # picks up target\release\glass-mic.exe
+.\install.ps1   # picks up target\release\couchmic.exe
 ```
 
 `cargo test` runs the unit tests; on Linux/macOS only a stub binary is built, and the platform
@@ -175,4 +175,4 @@ MIT, see [LICENSE](LICENSE). Release binaries include third-party code (libopus 
 Rust crates under MIT/Apache-2.0/BSD/ISC); their notices ship as `THIRD-PARTY-LICENSES.html`.
 VB-CABLE is a separate product by VB-Audio and is not included. Tailscale is a trademark of
 Tailscale Inc.; iPad, iPhone and Safari are trademarks of Apple Inc.; Windows is a trademark of
-Microsoft Corporation. glass-mic is not affiliated with any of them.
+Microsoft Corporation. CouchMic is not affiliated with any of them.

@@ -8,7 +8,7 @@ versions follow [Semantic Versioning](https://semver.org/).
 First public version.
 
 - Safari on iPad/iPhone sends the microphone over WebRTC (Opus, in-band FEC, PLC) with a PCM over
-  WebSocket fallback; glass-mic plays it into VB-CABLE.
+  WebSocket fallback; CouchMic plays it into VB-CABLE.
 - Adaptive jitter buffer with drift compensation (sinc resampler).
 - Switches the Windows default microphone to CABLE Output while connected and restores it
   afterwards, also after a crash (`--restore-mic`).
@@ -18,9 +18,10 @@ First public version.
 - Resource limits: 64 KiB messages, 4 connections, 100 ms PCM blocks, idle timeout, rate-limited
   and sanitised client logs; firewall rule limited to the Tailscale interface and Tailscale
   addresses.
-- Quit in the tray keeps the watchdog from restarting glass-mic until the next Windows sign-in.
+- Quit in the tray keeps the watchdog from restarting CouchMic until the next Windows sign-in.
 - One active audio source at a time; the newest sender takes over.
-- Tray icon, Windows notifications under their own app id, German and English UI.
+- Tray icon, Windows notifications under their own app id that name the sending device (iPhone,
+  iPad, Android), German and English UI.
 - Log file with rotation at 5 MB; stats are only logged while a client is connected.
 - `install.ps1` for install, update and uninstall (scheduled task with watchdog, firewall rule,
   `tailscale serve`).

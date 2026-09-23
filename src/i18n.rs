@@ -25,6 +25,28 @@ impl Lang {
     }
 }
 
+/// Kind of sending device, as the page reports it in "hello". Only these fixed values reach
+/// the tray and the notifications, never text from the client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Device {
+    IPhone,
+    IPad,
+    Android,
+    #[default]
+    Other,
+}
+
+impl Device {
+    pub fn from_hello(value: Option<&str>) -> Self {
+        match value {
+            Some("iphone") => Device::IPhone,
+            Some("ipad") => Device::IPad,
+            Some("android") => Device::Android,
+            _ => Device::Other,
+        }
+    }
+}
+
 /// All PC-side strings. `&'static str` where fixed, functions where values are inserted.
 pub struct Texts {
     pub lang: Lang,
@@ -43,7 +65,30 @@ impl Texts {
     }
 
     pub fn waiting(&self) -> &'static str {
-        self.pick("Glass Mic: wartet auf iPad", "Glass Mic: waiting for iPad")
+        self.pick(
+            "CouchMic: wartet auf Verbindung",
+            "CouchMic: waiting for a connection",
+        )
+    }
+
+    /// Device name at the start of a sentence.
+    fn device(&self, d: Device) -> &'static str {
+        match d {
+            Device::IPhone => "iPhone",
+            Device::IPad => "iPad",
+            Device::Android => self.pick("Android-Gerät", "Android device"),
+            Device::Other => self.pick("Gerät", "Device"),
+        }
+    }
+
+    /// "iPhone verbunden", or "2 Geräte verbunden" with several senders.
+    fn connected(&self, d: Device, clients: u32) -> String {
+        match (self.lang, clients) {
+            (Lang::De, 0 | 1) => format!("{} verbunden", self.device(d)),
+            (Lang::En, 0 | 1) => format!("{} connected", self.device(d)),
+            (Lang::De, n) => format!("{n} Geräte verbunden"),
+            (Lang::En, n) => format!("{n} devices connected"),
+        }
     }
 
     pub fn menu_auto_switch(&self) -> &'static str {
@@ -65,17 +110,8 @@ impl Texts {
         self.pick("Beenden", "Quit")
     }
 
-    pub fn status_connected(&self, path: &str, clients: u32) -> String {
-        match self.lang {
-            Lang::De => format!(
-                "Glass Mic: iPad verbunden ({path}, {clients} Client{})",
-                if clients == 1 { "" } else { "s" }
-            ),
-            Lang::En => format!(
-                "Glass Mic: iPad connected ({path}, {clients} client{})",
-                if clients == 1 { "" } else { "s" }
-            ),
-        }
+    pub fn status_connected(&self, device: Device, path: &str, clients: u32) -> String {
+        format!("CouchMic: {} ({path})", self.connected(device, clients))
     }
 
     pub fn tooltip_idle(&self, device: &str, switching: bool) -> String {
@@ -95,7 +131,7 @@ impl Texts {
 
     pub fn tooltip_connected(
         &self,
-        path: &str,
+        head: &str,
         buffered_ms: f64,
         target_ms: f64,
         loss_pct: f64,
@@ -103,30 +139,33 @@ impl Texts {
     ) -> String {
         match self.lang {
             Lang::De => format!(
-                "Glass Mic: iPad verbunden ({path})\nPuffer {buffered_ms:.0} ms (Ziel {target_ms:.0}), Verlust {loss_pct:.1} %, Underruns {underruns}"
+                "{head}\nPuffer {buffered_ms:.0} ms (Ziel {target_ms:.0}), Verlust {loss_pct:.1} %, Underruns {underruns}"
             ),
             Lang::En => format!(
-                "Glass Mic: iPad connected ({path})\nBuffer {buffered_ms:.0} ms (target {target_ms:.0}), loss {loss_pct:.1} %, underruns {underruns}"
+                "{head}\nBuffer {buffered_ms:.0} ms (target {target_ms:.0}), loss {loss_pct:.1} %, underruns {underruns}"
             ),
         }
     }
 
-    pub fn toast_connected(&self, mic: &str, switched: bool) -> String {
+    pub fn toast_connected(&self, device: Device, mic: &str, switched: bool) -> String {
+        let head = self.connected(device, 1);
         match (self.lang, switched) {
-            (Lang::De, true) => format!("iPad verbunden. {mic} ist jetzt das Standard-Mikrofon."),
-            (Lang::De, false) => format!("iPad verbunden. Mikrofon: {mic}."),
-            (Lang::En, true) => format!("iPad connected. {mic} is now the default microphone."),
-            (Lang::En, false) => format!("iPad connected. Microphone: {mic}."),
+            (Lang::De, true) => format!("{head}. {mic} ist jetzt das Standard-Mikrofon."),
+            (Lang::De, false) => format!("{head}. Mikrofon: {mic}."),
+            (Lang::En, true) => format!("{head}. {mic} is now the default microphone."),
+            (Lang::En, false) => format!("{head}. Microphone: {mic}."),
         }
     }
 
-    pub fn toast_disconnected(&self, restored: bool) -> &'static str {
-        match restored {
-            true => self.pick(
-                "iPad getrennt. Das vorige Mikrofon ist wieder Standard.",
-                "iPad disconnected. The previous microphone is the default again.",
-            ),
-            false => self.pick("iPad getrennt.", "iPad disconnected."),
+    pub fn toast_disconnected(&self, device: Device, restored: bool) -> String {
+        let d = self.device(device);
+        match (self.lang, restored) {
+            (Lang::De, true) => format!("{d} getrennt. Das vorige Mikrofon ist wieder Standard."),
+            (Lang::De, false) => format!("{d} getrennt."),
+            (Lang::En, true) => {
+                format!("{d} disconnected. The previous microphone is the default again.")
+            }
+            (Lang::En, false) => format!("{d} disconnected."),
         }
     }
 }
@@ -151,13 +190,45 @@ mod tests {
     fn texts_fill_in_values() {
         let de = Texts::new(Lang::De);
         let en = Texts::new(Lang::En);
-        assert!(de
-            .toast_connected("CABLE Output", true)
-            .contains("Standard-Mikrofon"));
+        assert_eq!(
+            de.toast_connected(Device::IPhone, "CABLE Output", true),
+            "iPhone verbunden. CABLE Output ist jetzt das Standard-Mikrofon."
+        );
+        assert_eq!(
+            en.toast_connected(Device::IPad, "CABLE Output", true),
+            "iPad connected. CABLE Output is now the default microphone."
+        );
+        assert_eq!(
+            de.toast_disconnected(Device::Android, false),
+            "Android-Gerät getrennt."
+        );
+        assert_eq!(
+            de.status_connected(Device::IPad, "PCM", 1),
+            "CouchMic: iPad verbunden (PCM)"
+        );
+        assert_eq!(
+            en.status_connected(Device::IPhone, "PCM", 2),
+            "CouchMic: 2 devices connected (PCM)"
+        );
+    }
+
+    #[test]
+    fn only_known_device_values_are_used() {
+        assert_eq!(Device::from_hello(Some("iphone")), Device::IPhone);
+        assert_eq!(Device::from_hello(Some("ipad")), Device::IPad);
+        assert_eq!(Device::from_hello(Some("android")), Device::Android);
+        for v in [
+            None,
+            Some(""),
+            Some("iPhone"),
+            Some("evil\nline"),
+            Some("other"),
+        ] {
+            assert_eq!(Device::from_hello(v), Device::Other, "{v:?}");
+        }
+        let en = Texts::new(Lang::En);
         assert!(en
-            .toast_connected("CABLE Output", true)
-            .contains("default microphone"));
-        assert!(en.status_connected("PCM", 2).ends_with("2 clients)"));
-        assert!(de.status_connected("PCM", 1).ends_with("1 Client)"));
+            .toast_connected(Device::Other, "CABLE Output", false)
+            .starts_with("Device connected."));
     }
 }

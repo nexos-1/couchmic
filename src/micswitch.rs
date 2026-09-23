@@ -424,7 +424,7 @@ mod tests {
                 },
             ),
         ];
-        let d = std::env::temp_dir().join(format!("glass-mic-state-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("couchmic-state-{}", std::process::id()));
         let p = d.join("previous-mic.txt");
         save_state(&p, &target, &prev).unwrap();
         let (t, v) = load_state(&p).unwrap();

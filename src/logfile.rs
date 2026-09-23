@@ -1,4 +1,4 @@
-//! Log file with size-based rotation. glass-mic appends to one file; once it grows beyond the
+//! Log file with size-based rotation. CouchMic appends to one file; once it grows beyond the
 //! limit it is moved to `<name>.1` (replacing an older one) and a new file is started, so at most
 //! two files of bounded size remain. The check runs on every write, not only at startup, so a
 //! long run cannot fill the disk.
@@ -96,7 +96,7 @@ impl Write for RotatingFile {
         }
         let Some(f) = self.file.as_mut() else {
             // Reopening failed (disk full, file locked): drop the line instead of failing the
-            // program. Logging must never take glass-mic down.
+            // program. Logging must never take CouchMic down.
             return Ok(buf.len());
         };
         let n = f.write(buf)?;
@@ -117,7 +117,7 @@ mod tests {
     use super::*;
 
     fn temp_dir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("glass-mic-test-{name}-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("couchmic-test-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
@@ -126,16 +126,16 @@ mod tests {
     #[test]
     fn rotates_only_when_too_large() {
         let d = temp_dir("rotate");
-        let log = d.join("glass-mic.log");
+        let log = d.join("couchmic.log");
         assert!(!rotate_if_larger(&log, 10).unwrap(), "missing file is fine");
         std::fs::write(&log, b"12345").unwrap();
         assert!(!rotate_if_larger(&log, 10).unwrap());
         std::fs::write(&log, b"0123456789abc").unwrap();
-        std::fs::write(d.join("glass-mic.log.1"), b"older").unwrap();
+        std::fs::write(d.join("couchmic.log.1"), b"older").unwrap();
         assert!(rotate_if_larger(&log, 10).unwrap());
         assert!(!log.exists());
         assert_eq!(
-            std::fs::read(d.join("glass-mic.log.1")).unwrap(),
+            std::fs::read(d.join("couchmic.log.1")).unwrap(),
             b"0123456789abc",
             "older rotation is replaced"
         );
@@ -145,17 +145,17 @@ mod tests {
     #[test]
     fn rotates_while_running_and_stays_bounded() {
         let d = temp_dir("runtime");
-        let log = d.join("glass-mic.log");
+        let log = d.join("couchmic.log");
         let mut f = RotatingFile::open(log.clone(), 100).unwrap();
         for _ in 0..50 {
             f.write_all(b"0123456789012345678\n").unwrap(); // 20 bytes per line
         }
         f.flush().unwrap();
         let cur = std::fs::metadata(&log).unwrap().len();
-        let old = std::fs::metadata(d.join("glass-mic.log.1")).unwrap().len();
+        let old = std::fs::metadata(d.join("couchmic.log.1")).unwrap().len();
         assert!(cur <= 100, "current file bounded: {cur}");
         assert!(old <= 100, "rotated file bounded: {old}");
-        assert!(!d.join("glass-mic.log.2").exists());
+        assert!(!d.join("couchmic.log.2").exists());
         drop(f);
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -163,7 +163,7 @@ mod tests {
     #[test]
     fn hard_cap_when_rotation_is_impossible() {
         let d = temp_dir("cap");
-        let log = d.join("glass-mic.log");
+        let log = d.join("couchmic.log");
         let mut f = RotatingFile::open(log.clone(), 100).unwrap();
         // Simulate a failed rotation: pretend one was just attempted, so no retry happens now.
         f.last_attempt = Some(std::time::Instant::now());

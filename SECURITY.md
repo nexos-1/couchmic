@@ -3,14 +3,14 @@
 ## Reporting a vulnerability
 
 Please do not open a public issue. Use GitHub's private reporting instead:
-**Security** tab of this repository, **Report a vulnerability**. Please include the glass-mic
-version (`glass-mic.exe --version`), Windows version and steps to reproduce.
+**Security** tab of this repository, **Report a vulnerability**. Please include the CouchMic
+version (`couchmic.exe --version`), Windows version and steps to reproduce.
 
 Only the latest release is supported with fixes.
 
 ## Threat model
 
-glass-mic receives audio from your own devices and plays it into a virtual microphone on your
+CouchMic receives audio from your own devices and plays it into a virtual microphone on your
 PC. The relevant risks are someone else injecting audio into that microphone, switching your
 default microphone, or reading the status endpoint.
 
@@ -27,7 +27,7 @@ What protects it:
   internet) are always rejected. `install.ps1` refuses to configure `tailscale serve` while Funnel
   is enabled for the port.
 - **Browsers:** allowed Host header (loopback, the PC's Tailscale name, `--allow-origin`) against
-  DNS rebinding; a present Origin must be readable and be the glass-mic page itself, against
+  DNS rebinding; a present Origin must be readable and be the CouchMic page itself, against
   cross-site WebSockets; `Sec-Fetch-Site` must be `none` or `same-origin`, against links and
   embeds from other sites; `frame-ancestors 'none'` and `X-Frame-Options: DENY` against framing.
 - **WebRTC:** UDP 8322 is only bound while a session runs. The firewall rule from `install.ps1`
@@ -55,7 +55,7 @@ Local connections are trusted: a request that reaches 127.0.0.1:8321 directly (n
 `tailscale serve`) is only checked for Host, Origin and `Sec-Fetch-Site`. Do not forward the
 port with raw TCP tools (`tailscale serve --tcp`, `netsh interface portproxy`, `ssh -L`): such a
 forward arrives as a local connection and skips the Tailscale user check. `install.ps1` refuses
-to install while `tailscale serve` has a raw TCP forward to the glass-mic port. Other Windows
+to install while `tailscale serve` has a raw TCP forward to the CouchMic port. Other Windows
 users signed in on the same PC can reach the local port as well.
 
 ## Supply chain
@@ -65,7 +65,7 @@ users signed in on the same PC can reach the local port as well.
 - GitHub Actions are pinned to commit SHAs; no job keeps git credentials after checkout.
 - Release binaries are built by GitHub Actions from the tagged commit in a job with a read-only
   token and without caches; a separate job creates a build provenance attestation (verify with
-  `gh attestation verify glass-mic.exe -R nexos-1/glass-mic`) and another one drafts the release.
+  `gh attestation verify couchmic.exe -R nexos-1/couchmic`) and another one drafts the release.
   The release lists the SHA-256 of the zip and the exe. The binary is not code-signed yet.
-- Known advisories that are not reachable in glass-mic are documented with a reason in
+- Known advisories that are not reachable in CouchMic are documented with a reason in
   `deny.toml`.

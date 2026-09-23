@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Glass Mic">
+<meta name="apple-mobile-web-app-title" content="CouchMic">
 <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F2F2F7">
 <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000">
-<title>Glass Mic</title>
+<title>CouchMic</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icon-180.png?v=3">
 <link rel="icon" href="/icon-192.png?v=3" type="image/png">
@@ -207,7 +207,7 @@
 <body>
 <main>
   <header>
-    <h1>Glass Mic</h1>
+    <h1>CouchMic</h1>
     <p class="host" id="host" data-i18n="connecting">Verbindet …</p>
   </header>
 
@@ -281,7 +281,7 @@ const I18N = {
     micDenied: (m) => 'Mikrofon-Zugriff verweigert (' + m + '). In den Einstellungen unter Safari, Mikrofon den Zugriff erlauben.',
     noMic: 'Kein Mikrofon', noMicSub: 'Zugriff in den Safari-Einstellungen erlauben.',
     connectingState: 'Verbinde …', searching: 'Sucht den PC im Tailnet.',
-    unreachable: 'PC nicht erreichbar', unreachableSub: 'Ist Tailscale auf dem iPad verbunden und läuft Glass Mic am PC?',
+    unreachable: 'PC nicht erreichbar', unreachableSub: 'Ist Tailscale auf dem iPad verbunden und läuft CouchMic am PC?',
     bufferTarget: (b, t) => b + ' ms, Ziel ' + t + ' ms',
     stopped: 'Beendet', stoppedSub: 'Das vorige PC-Mikrofon ist in ein paar Sekunden wieder aktiv.',
     insecure: 'Keine sichere Verbindung (HTTPS nötig), der Mikrofon-Zugriff wird blockiert.',
@@ -309,7 +309,7 @@ const I18N = {
     micDenied: (m) => 'Microphone access denied (' + m + '). Allow it in Settings, Safari, Microphone.',
     noMic: 'No microphone', noMicSub: 'Allow access in the Safari settings.',
     connectingState: 'Connecting …', searching: 'Looking for the PC in the tailnet.',
-    unreachable: 'PC not reachable', unreachableSub: 'Is Tailscale connected on the iPad and is glass-mic running on the PC?',
+    unreachable: 'PC not reachable', unreachableSub: 'Is Tailscale connected on the iPad and is CouchMic running on the PC?',
     bufferTarget: (b, t) => b + ' ms, target ' + t + ' ms',
     stopped: 'Stopped', stoppedSub: 'The previous PC microphone is active again in a few seconds.',
     insecure: 'No secure connection (HTTPS required), microphone access is blocked.',
@@ -405,7 +405,7 @@ function openWs() {
     const old = ws;
     if (old) { old.onopen = old.onclose = old.onerror = old.onmessage = null; if (old._settle) old._settle(false); try { old.close(); } catch {} }
     const sock = new WebSocket(wsUrl()); ws = sock; sock.binaryType = 'arraybuffer'; sock._settle = resolve;
-    sock.onopen = () => { wsReady = true; $('ws').textContent = L.wsConnected; sock.send(JSON.stringify({ type: 'hello', ua: navigator.userAgent, standalone: isStandalone() })); flushTel(); resolve(true); };
+    sock.onopen = () => { wsReady = true; $('ws').textContent = L.wsConnected; sock.send(JSON.stringify({ type: 'hello', ua: navigator.userAgent, device: deviceKind(), standalone: isStandalone() })); flushTel(); resolve(true); };
     sock.onmessage = (ev) => { if (typeof ev.data !== 'string') return; let m; try { m = JSON.parse(ev.data); } catch { return; }
       if (m.type === 'welcome') { $('host').textContent = (m.host || 'PC') + ' · ' + location.host; }
       if (m.type === 'pong') { latency = (performance.now() - m.t); $('lat').textContent = latency.toFixed(0) + L.rtt; }
@@ -550,7 +550,7 @@ async function startInner() {
   const okRtc = await startRtc();
   if (!okRtc) startPcmPath();
   setStatus(L.sending, liveText(), 'live'); beep(880, 90);
-  try { localStorage.setItem('glassmic.autostart', '1'); } catch {}
+  try { localStorage.setItem('couchmic.autostart', '1'); } catch {}
 
   // Level: fast attack, slow release, as a CSS variable on the pane (transform/opacity only).
   const data = new Uint8Array(analyser.fftSize); let lvl = 0;
@@ -583,12 +583,21 @@ function toggleMute() {
   setStatus(muted ? L.muted : L.sending, muted ? L.mutedSub : liveText(), muted ? 'muted' : 'live');
 }
 
+// Shown in the PC's notifications. iPadOS Safari reports a Mac user agent; the touch screen gives
+// the iPad away. Only these fixed values are sent.
+function deviceKind() {
+  const ua = navigator.userAgent;
+  if (/iPhone|iPod/.test(ua)) return 'iphone';
+  if (/iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'ipad';
+  if (/Android/.test(ua)) return 'android';
+  return 'other';
+}
 function isStandalone() { return window.navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches); }
 
 // Remember the switches: read from localStorage on load, save on every change.
 for (const id of ['ec', 'ns', 'agc', 'forcepcm']) {
-  try { const v = localStorage.getItem('glassmic.' + id); if (v !== null) $(id).checked = v === '1'; } catch {}
-  $(id).addEventListener('change', () => { try { localStorage.setItem('glassmic.' + id, $(id).checked ? '1' : '0'); } catch {} });
+  try { const v = localStorage.getItem('couchmic.' + id); if (v !== null) $(id).checked = v === '1'; } catch {}
+  $(id).addEventListener('change', () => { try { localStorage.setItem('couchmic.' + id, $(id).checked ? '1' : '0'); } catch {} });
 }
 $('btn').onclick = () => running ? stop() : start().catch(e => { $('err').textContent = L.startFailed + e.message; });
 $('mute').onclick = toggleMute;
@@ -600,7 +609,7 @@ $('host').textContent = location.host;
 // Between tabs: a running tab answers "ping" with "alive" and stops on "stop". This lets a
 // Shortcuts automation with ?stop=1 stop the microphone, and ?autostart=1 does not start a
 // second recording while a tab is already sending.
-const bus = ('BroadcastChannel' in window) ? new BroadcastChannel('glassmic') : null;
+const bus = ('BroadcastChannel' in window) ? new BroadcastChannel('couchmic') : null;
 if (bus) bus.onmessage = (ev) => {
   const m = ev.data || {};
   if (m.type === 'ping' && running) bus.postMessage({ type: 'alive' });
@@ -624,7 +633,7 @@ function otherTabRunning() {
     setStatus(L.stopped, was ? L.otherTabStill : L.stoppedInSafari, '');
     return;
   }
-  let wantAuto = false; try { wantAuto = localStorage.getItem('glassmic.autostart') === '1'; } catch {}
+  let wantAuto = false; try { wantAuto = localStorage.getItem('couchmic.autostart') === '1'; } catch {}
   if ((params.get('autostart') === '1' || isStandalone()) && wantAuto && window.isSecureContext) {
     if (await otherTabRunning()) { setStatus(L.alreadyRunning, L.alreadyRunningSub, 'live'); $('btn').disabled = true; return; }
     start().catch(() => {});

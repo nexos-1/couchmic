@@ -1,8 +1,8 @@
-# glass-mic
+# CouchMic
 
 Das iPad oder iPhone als Mikrofon für den Windows-PC. Auf dem iPad wird keine App installiert:
 Safari schickt das Mikrofon per WebRTC durch dein [Tailscale](https://tailscale.com)-Netz,
-glass-mic spielt es in [VB-CABLE](https://vb-audio.com/Cable/), und jede Windows-App kann
+CouchMic spielt es in [VB-CABLE](https://vb-audio.com/Cable/), und jede Windows-App kann
 „CABLE Output“ als Mikrofon benutzen.
 
 Gedacht für Remote-Desktop-Setups (Moonlight/Sunshine, Jump Desktop, Parsec), bei denen das iPad
@@ -21,13 +21,13 @@ Die ausführliche Dokumentation steht in der [englischen README](README.md). Hie
 
 ## Installation
 
-1. `glass-mic-<version>-windows-x64.zip` aus den
-   [Releases](https://github.com/nexos-1/glass-mic/releases) laden und entpacken.
+1. `couchmic-<version>-windows-x64.zip` aus den
+   [Releases](https://github.com/nexos-1/couchmic/releases) laden und entpacken.
 2. PowerShell in dem Ordner öffnen:
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\install.ps1
    ```
-   Das Skript prüft VB-CABLE, kopiert glass-mic nach `%LOCALAPPDATA%\GlassMic`, legt die
+   Das Skript prüft VB-CABLE, kopiert CouchMic nach `%LOCALAPPDATA%\CouchMic`, legt die
    Firewall-Regel für UDP 8322 an (eine Admin-Abfrage), richtet eine geplante Aufgabe ein (Start
    bei Anmeldung, Neustart bei Bedarf) und startet `tailscale serve`. Am Ende steht die Adresse
    für das iPad da, z.B. `https://mein-pc.tail1234.ts.net/`.
@@ -48,7 +48,7 @@ Das Programm ist noch nicht code-signiert; Windows SmartScreen warnt beim ersten
 - Kurzbefehle-Automation: „Wenn App geöffnet wird“ (z.B. Moonlight), Aktion „URL öffnen“
   `https://<pc>.<tailnet>.ts.net/?autostart=1`; „Wenn App geschlossen wird“ mit `?stop=1`.
 - Tray-Menü: Status, automatische Mikrofon-Umschaltung an/aus, Web-Oberfläche, Log-Ordner, Beenden.
-- Log: `%LOCALAPPDATA%\GlassMic\glass-mic.log`.
+- Log: `%LOCALAPPDATA%\CouchMic\couchmic.log`.
 
 ## Sicherheit und Datenschutz
 
@@ -69,5 +69,5 @@ Details in [README.md](README.md) und [SECURITY.md](SECURITY.md).
 MIT, siehe [LICENSE](LICENSE). Hinweise zu enthaltener Fremdsoftware (u.a. libopus) liegen dem
 Release als `THIRD-PARTY-LICENSES.html` bei. VB-CABLE ist ein eigenes Produkt von VB-Audio und
 nicht enthalten. Tailscale ist eine Marke der Tailscale Inc., iPad, iPhone und Safari sind Marken
-der Apple Inc., Windows ist eine Marke der Microsoft Corporation; glass-mic steht mit keinem
+der Apple Inc., Windows ist eine Marke der Microsoft Corporation; CouchMic steht mit keinem
 dieser Unternehmen in Verbindung.

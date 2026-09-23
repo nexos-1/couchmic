@@ -10,7 +10,7 @@
 //! - Framing / cross-site navigation: another site embeds or links the page to trick a tap on
 //!   "Start". Stopped by `Sec-Fetch-Site` and the frame headers.
 //! - Tailscale Funnel: Funnel is enabled per host:port, not per path. If the user ever turns it
-//!   on for port 443, glass-mic would be reachable from the whole internet. `tailscale serve`
+//!   on for port 443, CouchMic would be reachable from the whole internet. `tailscale serve`
 //!   marks those requests with `Tailscale-Funnel-Request`; they are always rejected.
 //! - Other tailnet users: in a shared tailnet anyone could inject audio. Requests forwarded by
 //!   `tailscale serve` (they carry `X-Forwarded-Host`) must carry the `Tailscale-User-Login` of

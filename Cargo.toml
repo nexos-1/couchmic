@@ -1,18 +1,18 @@
 [package]
-name = "glass-mic"
+name = "couchmic"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT"
-description = "Use your iPad or iPhone microphone as a Windows microphone: Safari sends audio over WebRTC (Tailscale), glass-mic plays it into VB-CABLE."
-repository = "https://github.com/nexos-1/glass-mic"
+description = "Use your iPad or iPhone microphone as a Windows microphone: Safari sends audio over WebRTC (Tailscale), CouchMic plays it into VB-CABLE."
+repository = "https://github.com/nexos-1/couchmic"
 readme = "README.md"
 keywords = ["microphone", "webrtc", "ipad", "vb-cable", "tailscale"]
 categories = ["multimedia::audio"]
 publish = false
 
 [[bin]]
-name = "glass-mic"
+name = "couchmic"
 path = "src/main.rs"
 
 # Supply chain: every version below was at least 14 days old when it was pinned.

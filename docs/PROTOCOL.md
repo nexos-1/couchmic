@@ -1,6 +1,6 @@
 # Protocol
 
-Everything the page (`src/web/index.html`) and glass-mic exchange. Useful if you want to write
+Everything the page (`src/web/index.html`) and CouchMic exchange. Useful if you want to write
 your own sender (a native app, another browser page) or read the status from a script.
 
 ## HTTP routes (127.0.0.1:8321, behind `tailscale serve`)
@@ -37,16 +37,16 @@ at most 4 connections (the 5th gets HTTP 503). A connection only counts as a cli
 the default microphone) once it sends a PCM frame or an `offer`. It is closed after 2 minutes
 without messages unless its WebRTC audio is still flowing.
 
-### Sender to glass-mic
+### Sender to CouchMic
 
 | Message | Meaning |
 | --- | --- |
-| `{"type":"hello","ua":"...","standalone":false}` | First message; logged |
+| `{"type":"hello","ua":"...","device":"ipad","standalone":false}` | First message; logged. `device` (`iphone`, `ipad`, `android`, anything else counts as a generic device) names the sender in the PC's notifications |
 | `{"type":"ping","t":123.4}` | Latency probe; `t` is echoed back |
 | `{"type":"offer","sdp":"..."}` | WebRTC offer with one audio track. Non-trickle: the SDP must contain the ICE candidates (the page waits for gathering to complete) |
 | `{"type":"log", ...}` | Telemetry; only the fields `ev vis standalone ctx running path state ice code reason enabled ready muted ua t` are logged (cut to 200 characters, escaped, at most 20 per 10 s) |
 
-### glass-mic to sender
+### CouchMic to sender
 
 | Message | Meaning |
 | --- | --- |
@@ -57,7 +57,7 @@ without messages unless its WebRTC audio is still flowing.
 
 ### WebRTC path (preferred)
 
-- Opus only, 48 kHz, mono, `useinbandfec=1`. glass-mic offers no other codec.
+- Opus only, 48 kHz, mono, `useinbandfec=1`. CouchMic offers no other codec.
 - ICE host candidates only (no STUN/TURN); inside a tailnet both sides reach each other directly.
 - Closing the WebSocket tears the peer connection down.
 

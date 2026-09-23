@@ -7,7 +7,7 @@
 //! Icon: grey dot = waiting, green dot = iPad connected, yellow dot = connected, but trouble
 //! (loss/underruns within the last minute).
 
-use crate::i18n::Texts;
+use crate::i18n::{Device, Texts};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
@@ -24,6 +24,7 @@ pub enum TrayState {
         path: String,
         clients: u32,
         trouble: bool,
+        device: Device,
     },
 }
 
@@ -95,7 +96,7 @@ fn dot_icon(rgb: [u8; 3]) -> Icon {
 }
 
 fn open_in_shell(target: &str) {
-    // Full path: a bare "explorer.exe" would also be looked up in glass-mic's own folder first.
+    // Full path: a bare "explorer.exe" would also be looked up in CouchMic's own folder first.
     let windir = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
     let explorer = std::path::PathBuf::from(windir).join("explorer.exe");
     let _ = std::process::Command::new(explorer).arg(target).spawn();
@@ -113,7 +114,7 @@ pub fn start(
     let (ready_tx, ready_rx) = channel::<Result<u32, String>>();
 
     std::thread::Builder::new()
-        .name("glass-mic-tray".into())
+        .name("couchmic-tray".into())
         .spawn(move || {
             let thread_id = unsafe { GetCurrentThreadId() };
             let icon_idle = dot_icon([0x94, 0xa0, 0xad]);
@@ -206,9 +207,10 @@ pub fn start(
                                             path,
                                             clients,
                                             trouble,
+                                            device,
                                         } => (
                                             if *trouble { &icon_warn } else { &icon_on },
-                                            texts.status_connected(path, *clients),
+                                            texts.status_connected(*device, path, *clients),
                                         ),
                                     };
                                     let _ = tray.set_icon(Some(icon.clone()));
@@ -242,7 +244,7 @@ pub fn start(
 }
 
 /// Own app id for toasts. Without a registered id they showed up as "Windows PowerShell".
-const TOAST_APP_ID: &str = "GlassMic";
+const TOAST_APP_ID: &str = "CouchMic";
 
 /// Chosen app id: our own once registration worked, otherwise PowerShell's.
 static TOAST_ID: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
@@ -251,7 +253,7 @@ fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-/// Registers the app id under HKCU\Software\Classes\AppUserModelId\GlassMic with display name and
+/// Registers the app id under HKCU\Software\Classes\AppUserModelId\CouchMic with display name and
 /// icon, the way Windows expects it for unpackaged apps without a Start menu shortcut.
 /// Idempotent, no admin rights needed. The icon is written as PNG into `dir`.
 pub fn register_toast_app_id(icon_png: &[u8], dir: &std::path::Path) {
@@ -292,7 +294,7 @@ pub fn register_toast_app_id(icon_png: &[u8], dir: &std::path::Path) {
             }
         };
         let res =
-            set("DisplayName", "Glass Mic").and_then(|_| set("IconUri", &icon.to_string_lossy()));
+            set("DisplayName", "CouchMic").and_then(|_| set("IconUri", &icon.to_string_lossy()));
         unsafe {
             let _ = RegCloseKey(key);
         }

@@ -1,21 +1,21 @@
 <#
 .SYNOPSIS
-  Installs, updates or removes glass-mic for the current Windows user.
+  Installs, updates or removes CouchMic for the current Windows user.
 
 .DESCRIPTION
   Install / update (default):
     1. Checks that VB-CABLE is installed ("CABLE Input" output device).
-    2. Copies glass-mic.exe to %LOCALAPPDATA%\GlassMic (stops a running copy first).
+    2. Copies couchmic.exe to %LOCALAPPDATA%\CouchMic (stops a running copy first).
     3. Allows inbound UDP for WebRTC in the Windows firewall, from Tailscale addresses only
        (one UAC prompt, only if the rule is missing or different).
     4. Registers a scheduled task: start at logon, plus a 5-minute watchdog that restarts
-       glass-mic if it is not running. No admin rights needed.
+       CouchMic if it is not running. No admin rights needed.
     5. Runs `tailscale serve` so the iPad reaches https://<pc>.<tailnet>.ts.net/. Refuses if
        that address is already used for something else or Tailscale Funnel is on for it.
-    6. Starts glass-mic and checks that it answers.
+    6. Starts CouchMic and checks that it answers.
 
   -Uninstall reverses all of it, restores the previous default microphone and removes only
-  glass-mic's own files.
+  CouchMic's own files.
 
   Re-running the script is safe; it updates an existing installation in place.
 
@@ -27,16 +27,16 @@
 #>
 [CmdletBinding()]
 param(
-    # glass-mic.exe to install. Default: next to this script, else target\release\glass-mic.exe.
+    # couchmic.exe to install. Default: next to this script, else target\release\couchmic.exe.
     [string]$Exe,
-    [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'GlassMic'),
-    [string]$TaskName = 'GlassMic',
+    [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'CouchMic'),
+    [string]$TaskName = 'CouchMic',
     [int]$Port = 8321,
     [int]$RtcPort = 8322,
     # HTTPS port of `tailscale serve` (443, 8443 or 10000).
     [int]$HttpsPort = 443,
-    [string]$FirewallRuleName = 'Glass Mic (WebRTC UDP)',
-    # Extra arguments for glass-mic, e.g. '--no-toast'.
+    [string]$FirewallRuleName = 'CouchMic (WebRTC UDP)',
+    # Extra arguments for CouchMic, e.g. '--no-toast'.
     [string]$ExtraArgs = '',
     [switch]$SkipFirewall,
     [switch]$SkipTailscale,
@@ -55,14 +55,14 @@ function Write-Step([string]$text) { Write-Host "==> $text" -ForegroundColor Cya
 function Write-Ok([string]$text) { Write-Host "    $text" -ForegroundColor Green }
 function Write-Note([string]$text) { Write-Host "    $text" -ForegroundColor Yellow }
 
-# Files glass-mic creates; uninstall removes exactly these, nothing else. The program files live
-# in the install folder, the state always in %LOCALAPPDATA%\GlassMic (the data folder).
-$OwnFiles = @('glass-mic.exe', 'glass-mic.log', 'glass-mic.log.1', '.glass-mic-install')
+# Files CouchMic creates; uninstall removes exactly these, nothing else. The program files live
+# in the install folder, the state always in %LOCALAPPDATA%\CouchMic (the data folder).
+$OwnFiles = @('couchmic.exe', 'couchmic.log', 'couchmic.log.1', '.couchmic-install')
 $OwnDataFiles = @('previous-mic.txt', 'toast-icon.png')
-$MarkerName = '.glass-mic-install'
+$MarkerName = '.couchmic-install'
 # Tailscale address ranges (CGNAT IPv4 and the Tailscale ULA IPv6 prefix).
 $TailnetRanges = @('100.64.0.0/10', 'fd7a:115c:a1e0::/48')
-$FirewallDescription = 'glass-mic WebRTC audio, tailnet addresses only (managed by install.ps1)'
+$FirewallDescription = 'CouchMic WebRTC audio, tailnet addresses only (managed by install.ps1)'
 
 # ------------------------------------------------------------------------------------------------
 # Safety checks
@@ -82,31 +82,31 @@ $forbidden = @(
 if ($forbidden -contains $InstallDir) {
     throw "Refusing to use '$InstallDir' as the install folder."
 }
-if ((Split-Path $InstallDir -Leaf) -ne 'GlassMic' -and -not $Force) {
-    throw "The install folder should be named 'GlassMic' (got '$InstallDir'). Use -Force to override."
+if ((Split-Path $InstallDir -Leaf) -ne 'CouchMic' -and -not $Force) {
+    throw "The install folder should be named 'CouchMic' (got '$InstallDir'). Use -Force to override."
 }
 
-$installedExe = Join-Path $InstallDir 'glass-mic.exe'
-$logFile = Join-Path $InstallDir 'glass-mic.log'
-$DataDir = Join-Path $env:LOCALAPPDATA 'GlassMic'
+$installedExe = Join-Path $InstallDir 'couchmic.exe'
+$logFile = Join-Path $InstallDir 'couchmic.log'
+$DataDir = Join-Path $env:LOCALAPPDATA 'CouchMic'
 $ownUrl = "http://127.0.0.1:$Port"
 
 # ------------------------------------------------------------------------------------------------
 # Helpers
 
-function Stop-GlassMic {
-    $procs = @(Get-CimInstance Win32_Process -Filter "Name='glass-mic.exe'" |
+function Stop-CouchMic {
+    $procs = @(Get-CimInstance Win32_Process -Filter "Name='couchmic.exe'" |
         Where-Object { $_.ExecutablePath -and ([IO.Path]::GetFullPath($_.ExecutablePath) -ieq $installedExe) })
     foreach ($p in $procs) {
         Stop-Process -Id $p.ProcessId -Force -Confirm:$false -ErrorAction SilentlyContinue
-        Write-Ok "stopped running glass-mic (pid $($p.ProcessId))"
+        Write-Ok "stopped running CouchMic (pid $($p.ProcessId))"
     }
     if ($procs.Count -gt 0) { Start-Sleep -Milliseconds 800 }
 }
 
-# glass-mic is a GUI-subsystem program; `& glass-mic.exe` does not reliably hand its output to
+# CouchMic is a GUI-subsystem program; `& couchmic.exe` does not reliably hand its output to
 # PowerShell 5.1. Redirecting into a file with Start-Process always works.
-function Invoke-GlassMic([string]$path, [string[]]$arguments) {
+function Invoke-CouchMic([string]$path, [string[]]$arguments) {
     $out = [IO.Path]::GetTempFileName()
     try {
         $p = Start-Process -FilePath $path -ArgumentList $arguments -RedirectStandardOutput $out `
@@ -199,7 +199,7 @@ function Get-ServeState([string]$dns) {
             $tcp = $prop.Value
             $fwd = if ($tcp -and $tcp.PSObject.Properties['TCPForward']) { "$($tcp.TCPForward)" } else { '' }
             if ($prop.Name -eq "$HttpsPort" -and $fwd) { $state.TcpForward = $true }
-            # A raw TCP forward to glass-mic would bypass the Host and Tailscale-user checks:
+            # A raw TCP forward to CouchMic would bypass the Host and Tailscale-user checks:
             # the connection arrives as a plain local one.
             if ($fwd -match "^(127\.0\.0\.1|localhost|\[::1\]):$Port$") { $state.ForwardsToUs = $true }
         }
@@ -220,11 +220,11 @@ if ($Uninstall) {
         Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
         Write-Ok 'task removed'
     } else { Write-Ok 'no task found' }
-    Stop-GlassMic
+    Stop-CouchMic
 
     if (Test-Path $installedExe) {
-        Write-Step 'Restoring the previous default microphone (if glass-mic left CABLE Output as default)'
-        $r = Invoke-GlassMic $installedExe @('--restore-mic')
+        Write-Step 'Restoring the previous default microphone (if CouchMic left CABLE Output as default)'
+        $r = Invoke-CouchMic $installedExe @('--restore-mic')
         if ($r.Output) { Write-Ok ($r.Output.Trim() -split "`r?`n" | Select-Object -Last 1) }
     }
 
@@ -237,29 +237,29 @@ if ($Uninstall) {
     }
 
     if (-not $SkipTailscale -and (Get-TailscaleExe)) {
-        Write-Step "Removing glass-mic from tailscale serve (https port $HttpsPort)"
+        Write-Step "Removing CouchMic from tailscale serve (https port $HttpsPort)"
         $dns = Get-TailscaleName
         $state = if ($dns) { Get-ServeState $dns } else { $null }
         if ($state -and (Test-OwnRoot $state.Root)) {
             # Only our own mount "/", never other handlers on the port.
             $r = Invoke-Tailscale @('serve', "--https=$HttpsPort", '--set-path=/', 'off')
             if ($r.ExitCode -eq 0) { Write-Ok 'removed' } else { Write-Note "tailscale serve off failed: $($r.Output)" }
-        } else { Write-Ok 'glass-mic is not configured there, left unchanged' }
+        } else { Write-Ok 'CouchMic is not configured there, left unchanged' }
     }
 
     Write-Step 'Removing the notification app id and settings'
-    Remove-Item 'HKCU:\Software\Classes\AppUserModelId\GlassMic' -Recurse -ErrorAction SilentlyContinue
-    Remove-Item 'HKCU:\Software\GlassMic' -Recurse -ErrorAction SilentlyContinue
+    Remove-Item 'HKCU:\Software\Classes\AppUserModelId\CouchMic' -Recurse -ErrorAction SilentlyContinue
+    Remove-Item 'HKCU:\Software\CouchMic' -Recurse -ErrorAction SilentlyContinue
     foreach ($f in $OwnDataFiles) {
         $p = Join-Path $DataDir $f
         if (Test-Path -LiteralPath $p -PathType Leaf) { Remove-Item -LiteralPath $p -Force }
     }
     Write-Ok 'done'
 
-    Write-Step "Removing glass-mic's files from $InstallDir"
+    Write-Step "Removing CouchMic's files from $InstallDir"
     if (Test-Path $InstallDir) {
         foreach ($f in $OwnFiles) {
-            if ($KeepLogs -and $f -like 'glass-mic.log*') { continue }
+            if ($KeepLogs -and $f -like 'couchmic.log*') { continue }
             $p = Join-Path $InstallDir $f
             if (Test-Path -LiteralPath $p -PathType Leaf) { Remove-Item -LiteralPath $p -Force }
         }
@@ -267,7 +267,7 @@ if ($Uninstall) {
             Remove-Item -LiteralPath $InstallDir -Force
             Write-Ok 'folder removed'
         } else {
-            Write-Ok 'glass-mic files removed; other files in the folder were left untouched'
+            Write-Ok 'CouchMic files removed; other files in the folder were left untouched'
         }
     } else { Write-Ok 'not present' }
     if (($DataDir -ine $InstallDir) -and (Test-Path -LiteralPath $DataDir) -and
@@ -275,27 +275,27 @@ if ($Uninstall) {
         Remove-Item -LiteralPath $DataDir -Force
     }
     Write-Host ''
-    Write-Host 'glass-mic is uninstalled. VB-CABLE and Tailscale were left installed.' -ForegroundColor Green
+    Write-Host 'CouchMic is uninstalled. VB-CABLE and Tailscale were left installed.' -ForegroundColor Green
     return
 }
 
 # ------------------------------------------------------------------------------------------------
-Write-Step 'Locating glass-mic.exe'
+Write-Step 'Locating couchmic.exe'
 if (-not $Exe) {
     $candidates = @(
-        (Join-Path $PSScriptRoot 'glass-mic.exe'),
-        (Join-Path $PSScriptRoot 'target\release\glass-mic.exe')
+        (Join-Path $PSScriptRoot 'couchmic.exe'),
+        (Join-Path $PSScriptRoot 'target\release\couchmic.exe')
     )
     $Exe = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 }
 if (-not $Exe -or -not (Test-Path $Exe)) {
-    throw 'glass-mic.exe not found. Put it next to install.ps1 or pass -Exe <path>.'
+    throw 'couchmic.exe not found. Put it next to install.ps1 or pass -Exe <path>.'
 }
 $Exe = (Resolve-Path $Exe).Path
 Write-Ok $Exe
 
 Write-Step 'Checking VB-CABLE'
-$devices = (Invoke-GlassMic $Exe @('--list')).Output
+$devices = (Invoke-CouchMic $Exe @('--list')).Output
 if ("$devices" -notmatch 'CABLE Input') {
     Write-Host $devices
     throw 'VB-CABLE is not installed ("CABLE Input" missing). Install it from https://vb-audio.com/Cable/, reboot, then run this script again.'
@@ -316,28 +316,28 @@ if (-not $SkipTailscale) {
         } else {
             $state = Get-ServeState $tsName
             if ($state.Funnel -and -not $Force) {
-                throw "Tailscale Funnel is ON for ${tsName}:$HttpsPort, which would make glass-mic reachable from the internet (glass-mic rejects Funnel requests, but do not rely on that). Turn Funnel off for this port (tailscale funnel --https=$HttpsPort off) or use another -HttpsPort."
+                throw "Tailscale Funnel is ON for ${tsName}:$HttpsPort, which would make CouchMic reachable from the internet (CouchMic rejects Funnel requests, but do not rely on that). Turn Funnel off for this port (tailscale funnel --https=$HttpsPort off) or use another -HttpsPort."
             }
             if (-not $state.Ok) {
                 throw 'Cannot read the tailscale serve configuration (tailscale serve status --json). Run this script again once Tailscale works, or use -SkipTailscale.'
             }
             if ($state.ForwardsToUs) {
-                throw "tailscale serve has a raw TCP forward to 127.0.0.1:$Port. That would bypass glass-mic's access checks; remove it first (tailscale serve status)."
+                throw "tailscale serve has a raw TCP forward to 127.0.0.1:$Port. That would bypass CouchMic's access checks; remove it first (tailscale serve status)."
             }
             if ($state.TcpForward -and -not $Force) {
                 throw "Port $HttpsPort of $tsName is already used as a TCP forward in tailscale serve. Use another -HttpsPort or -Force."
             }
             if ($state.Root -and -not (Test-OwnRoot $state.Root) -and -not $Force) {
-                throw "https://${tsName}:$HttpsPort/ already serves something else in tailscale serve. glass-mic will not replace it. Use another -HttpsPort or -Force."
+                throw "https://${tsName}:$HttpsPort/ already serves something else in tailscale serve. CouchMic will not replace it. Use another -HttpsPort or -Force."
             }
             $serveNeeded = -not (Test-OwnRoot $state.Root)
-            Write-Ok ($(if ($serveNeeded) { 'free, will be configured' } else { 'already points to glass-mic' }))
+            Write-Ok ($(if ($serveNeeded) { 'free, will be configured' } else { 'already points to CouchMic' }))
         }
     }
 }
 
 if (-not $SkipFirewall) {
-    Write-Step "Firewall: inbound UDP $RtcPort for glass-mic, only on the Tailscale interface from Tailscale addresses"
+    Write-Step "Firewall: inbound UDP $RtcPort for CouchMic, only on the Tailscale interface from Tailscale addresses"
     $tsAdapter = Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue |
         Where-Object { $_.InterfaceDescription -like 'Tailscale*' } | Select-Object -First 1
     $alias = if ($tsAdapter) { $tsAdapter.Name } else { $null }
@@ -388,10 +388,10 @@ if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
     $disabledTask = $true
 }
 try {
-Stop-GlassMic
+Stop-CouchMic
 New-Item -ItemType Directory -Force $InstallDir | Out-Null
 if ($Exe -ine $installedExe) { Copy-Item -LiteralPath $Exe -Destination $installedExe -Force }
-Set-Content -LiteralPath (Join-Path $InstallDir $MarkerName) -Value 'glass-mic install folder (used by install.ps1 -Uninstall)' -Encoding ascii
+Set-Content -LiteralPath (Join-Path $InstallDir $MarkerName) -Value 'CouchMic install folder (used by install.ps1 -Uninstall)' -Encoding ascii
 Write-Ok $installedExe
 
 Write-Step "Scheduled task '$TaskName' (at logon, watchdog every 5 minutes)"
@@ -409,7 +409,7 @@ $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoi
     -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $triggers -Settings $settings `
-    -Principal $principal -Description 'glass-mic: iPad/iPhone microphone as a Windows microphone (VB-CABLE)' `
+    -Principal $principal -Description 'CouchMic: iPad/iPhone microphone as a Windows microphone (VB-CABLE)' `
     -Force | Out-Null
 Write-Ok 'registered'
 
@@ -423,9 +423,9 @@ if ($serveNeeded) {
     } else { Write-Ok 'configured (tailnet only)' }
 }
 
-Write-Step 'Starting glass-mic'
+Write-Step 'Starting CouchMic'
 # A tray "Quit" earlier in this session would keep the watchdog start from running.
-Remove-Item 'HKCU:\Software\GlassMic\StoppedByUser' -ErrorAction SilentlyContinue
+Remove-Item 'HKCU:\Software\CouchMic\StoppedByUser' -ErrorAction SilentlyContinue
 Start-ScheduledTask -TaskName $TaskName
 $ok = $false
 for ($i = 0; $i -lt 20; $i++) {
@@ -439,14 +439,14 @@ for ($i = 0; $i -lt 20; $i++) {
     } catch { }
 }
 if (-not $ok) {
-    throw "The installed glass-mic did not answer on port $Port (another program may use it). See $logFile"
+    throw "The installed CouchMic did not answer on port $Port (another program may use it). See $logFile"
 }
 Write-Ok "running, version $($stats.version), output: $($stats.device)"
 $disabledTask = $false
 } finally {
     if ($disabledTask -and (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) {
         # Something failed after the task was disabled: turn it back on and start it, so the
-        # user is not left without glass-mic (and the microphone recovery runs).
+        # user is not left without CouchMic (and the microphone recovery runs).
         Enable-ScheduledTask -TaskName $TaskName | Out-Null
         Start-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
         Write-Note 'install failed; the previous scheduled task was re-enabled and started'
@@ -458,5 +458,5 @@ if ($tsName) {
     $url = if ($HttpsPort -eq 443) { "https://$tsName/" } else { "https://${tsName}:$HttpsPort/" }
     Write-Host "Open on the iPad (Safari, Tailscale connected):  $url" -ForegroundColor Green
 } else {
-    Write-Host "glass-mic runs on $ownUrl/ . The iPad needs HTTPS, see README (Tailscale)." -ForegroundColor Green
+    Write-Host "CouchMic runs on $ownUrl/ . The iPad needs HTTPS, see README (Tailscale)." -ForegroundColor Green
 }

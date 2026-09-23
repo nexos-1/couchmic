@@ -1,4 +1,4 @@
-//! glass-mic, the Windows receiver.
+//! CouchMic, the Windows receiver.
 //!
 //! Two audio paths from the iPad:
 //! - WebRTC (preferred): Safari sends an Opus audio track over UDP (DTLS/SRTP). Signaling runs
@@ -19,7 +19,7 @@
 
 use crate::access;
 use crate::audio::{JitterBuffer, SharedBuffer, SourceGate, Stats};
-use crate::i18n::{Lang, Texts};
+use crate::i18n::{Device, Lang, Texts};
 use crate::logfile;
 use crate::micswitch::MicSwitch;
 use crate::tray::{self, TrayCommand, TrayHandle, TrayState};
@@ -66,9 +66,9 @@ const CLIENT_LOG_WINDOW: Duration = Duration::from_secs(10);
 /// Client-supplied strings are cut to this many characters in the log.
 const CLIENT_FIELD_MAX: usize = 200;
 /// Volatile registry key (HKCU, gone after logoff, restart and shutdown, also with Fast
-/// Startup) set when the user quits from the tray; the watchdog then leaves glass-mic stopped.
-const STOP_KEY_PARENT: &str = r"Software\GlassMic";
-const STOP_KEY: &str = r"Software\GlassMic\StoppedByUser";
+/// Startup) set when the user quits from the tray; the watchdog then leaves CouchMic stopped.
+const STOP_KEY_PARENT: &str = r"Software\CouchMic";
+const STOP_KEY: &str = r"Software\CouchMic\StoppedByUser";
 
 const INDEX_HTML: &str = include_str!("web/index.html");
 const MANIFEST: &str = include_str!("web/manifest.webmanifest");
@@ -79,7 +79,7 @@ const ICON_1024: &[u8] = include_bytes!("web/icon-1024.png");
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "glass-mic",
+    name = "couchmic",
     version,
     about = "Use your iPad or iPhone microphone as a Windows microphone (via VB-CABLE)"
 )]
@@ -121,7 +121,7 @@ struct Cli {
     /// No Windows notifications on connect/disconnect
     #[arg(long)]
     no_toast: bool,
-    /// Append the log to this file. Default without a console: %LOCALAPPDATA%\GlassMic\glass-mic.log
+    /// Append the log to this file. Default without a console: %LOCALAPPDATA%\CouchMic\couchmic.log
     #[arg(long)]
     log_file: Option<PathBuf>,
     /// Address the tray menu opens (default: https://<tailscale name>/ if known, else
@@ -137,7 +137,7 @@ struct Cli {
     /// custom reverse proxy (together with --allow-origin).
     #[arg(long)]
     allow_any_tailnet_user: bool,
-    /// Set by the scheduled task: do not start if the user quit glass-mic from the tray since the
+    /// Set by the scheduled task: do not start if the user quit CouchMic from the tray since the
     /// last Windows start.
     #[arg(long, hide = true)]
     watchdog: bool,
@@ -151,6 +151,9 @@ struct AppState {
     clients: Arc<Mutex<u32>>,
     switch: Arc<Mutex<Option<MicSwitch>>>,
     switch_enabled: Arc<AtomicBool>,
+    /// Mirrors MicSwitch::is_active, so async code never waits for the switch mutex (it is held
+    /// during COM calls into the Windows audio service, which can stall).
+    mic_active: Arc<AtomicBool>,
     restore_grace: Duration,
     rtc_stats: SharedRtcStats,
     rtc_udp_addr: Arc<String>,
@@ -158,6 +161,8 @@ struct AppState {
     tray: Arc<Option<TrayHandle>>,
     toast: bool,
     texts: Arc<Texts>,
+    /// Kind of the device that connected last, for the tray.
+    last_device: Arc<Mutex<Device>>,
     /// Time of the last trouble (underrun/loss), for the yellow tray icon.
     last_trouble: Arc<Mutex<Option<Instant>>>,
     /// Connection whose audio currently plays into the buffer (0 = none), see SourceGate.
@@ -294,13 +299,7 @@ fn now_ms() -> f64 {
 async fn stats(State(st): State<AppState>) -> impl IntoResponse {
     let s: Stats = st.buffer.lock().unwrap().stats();
     let r = *st.rtc_stats.lock().unwrap();
-    let mic_active = st
-        .switch
-        .lock()
-        .unwrap()
-        .as_ref()
-        .map(|m| m.is_active())
-        .unwrap_or(false);
+    let mic_active = st.mic_active.load(Ordering::Relaxed);
     Json(serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "pid": std::process::id(),
@@ -360,18 +359,22 @@ fn activate_switch(st: &AppState) {
         return;
     }
     let sw = st.switch.clone();
+    let active = st.mic_active.clone();
     tokio::task::spawn_blocking(move || {
         if let Some(m) = sw.lock().unwrap().as_mut() {
             m.activate();
+            active.store(m.is_active(), Ordering::Relaxed);
         }
     });
 }
 
 async fn restore_switch(st: &AppState) {
     let sw = st.switch.clone();
+    let active = st.mic_active.clone();
     tokio::task::spawn_blocking(move || {
         if let Some(m) = sw.lock().unwrap().as_mut() {
             m.restore();
+            active.store(m.is_active(), Ordering::Relaxed);
         }
     })
     .await
@@ -382,10 +385,11 @@ fn notify(st: &AppState, body: String) {
     if !st.toast {
         return;
     }
-    tokio::task::spawn_blocking(move || tray::toast("Glass Mic", &body));
+    tokio::task::spawn_blocking(move || tray::toast("CouchMic", &body));
 }
 
-fn on_client_connected(st: &AppState) {
+fn on_client_connected(st: &AppState, device: Device) {
+    *st.last_device.lock().unwrap() = device;
     let n = {
         let mut c = st.clients.lock().unwrap();
         *c += 1;
@@ -395,11 +399,11 @@ fn on_client_connected(st: &AppState) {
     if n == 1 {
         activate_switch(st);
         let switched = st.switch_enabled.load(Ordering::Relaxed);
-        notify(st, st.texts.toast_connected(&st.mic_name, switched));
+        notify(st, st.texts.toast_connected(device, &st.mic_name, switched));
     }
 }
 
-fn on_client_disconnected(st: &AppState) {
+fn on_client_disconnected(st: &AppState, device: Device) {
     let n = {
         let mut c = st.clients.lock().unwrap();
         *c = c.saturating_sub(1);
@@ -411,15 +415,9 @@ fn on_client_disconnected(st: &AppState) {
         tokio::spawn(async move {
             tokio::time::sleep(st2.restore_grace).await;
             if *st2.clients.lock().unwrap() == 0 {
-                let was_active = st2
-                    .switch
-                    .lock()
-                    .unwrap()
-                    .as_ref()
-                    .map(|m| m.is_active())
-                    .unwrap_or(false);
+                let was_active = st2.mic_active.load(Ordering::Relaxed);
                 restore_switch(&st2).await;
-                notify(&st2, st2.texts.toast_disconnected(was_active).to_string());
+                notify(&st2, st2.texts.toast_disconnected(device, was_active));
             }
         });
     }
@@ -465,8 +463,9 @@ impl LogBudget {
 
 /// Only these fields of client telemetry are logged, each cut and escaped, so a client can
 /// neither forge log lines (newlines) nor write large amounts of text.
-const CLIENT_LOG_FIELDS: [&str; 15] = [
+const CLIENT_LOG_FIELDS: [&str; 16] = [
     "ev",
+    "device",
     "vis",
     "standalone",
     "ctx",
@@ -592,6 +591,7 @@ async fn handle_ws(mut socket: WebSocket, st: AppState) {
     let mut oversized_text: u64 = 0;
     let mut log_budget = LogBudget::new();
     let mut last_rtc_packets: u64 = 0;
+    let mut device = Device::Other;
     loop {
         let msg = match tokio::time::timeout(IDLE_TIMEOUT, socket.recv()).await {
             Ok(Some(Ok(m))) => m,
@@ -639,7 +639,7 @@ async fn handle_ws(mut socket: WebSocket, st: AppState) {
                 pcm_rate = Some(rate);
                 if !counted {
                     counted = true;
-                    on_client_connected(&st);
+                    on_client_connected(&st, device);
                 }
                 // The first PCM block of this connection takes over the source; after that it
                 // only plays while no other connection has taken over.
@@ -674,9 +674,15 @@ async fn handle_ws(mut socket: WebSocket, st: AppState) {
                 let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) else {
                     continue;
                 };
-                if !counted && v.get("type").and_then(|x| x.as_str()) == Some("offer") {
-                    counted = true;
-                    on_client_connected(&st);
+                match v.get("type").and_then(|x| x.as_str()) {
+                    Some("hello") => {
+                        device = Device::from_hello(v.get("device").and_then(|d| d.as_str()))
+                    }
+                    Some("offer") if !counted => {
+                        counted = true;
+                        on_client_connected(&st, device);
+                    }
+                    _ => {}
                 }
                 if let Some(reply) =
                     handle_control(&v, &st, &mut session, &gate, &mut log_budget).await
@@ -703,7 +709,7 @@ async fn handle_ws(mut socket: WebSocket, st: AppState) {
         tracing::warn!(rejected_frames, oversized_text, "dropped invalid messages");
     }
     if counted {
-        on_client_disconnected(&st);
+        on_client_disconnected(&st, device);
     }
 }
 
@@ -740,6 +746,7 @@ async fn tray_status_loop(st: AppState) {
             );
         } else {
             let path = if r.connected { "WebRTC/Opus" } else { "PCM" };
+            let device = *st.last_device.lock().unwrap();
             let loss = if r.packets + r.lost > 0 {
                 r.lost as f64 * 100.0 / (r.packets + r.lost) as f64
             } else {
@@ -750,9 +757,15 @@ async fn tray_status_loop(st: AppState) {
                     path: path.to_string(),
                     clients,
                     trouble,
+                    device,
                 },
-                st.texts
-                    .tooltip_connected(path, s.buffered_ms, s.target_ms, loss, s.underruns),
+                st.texts.tooltip_connected(
+                    &st.texts.status_connected(device, path, clients),
+                    s.buffered_ms,
+                    s.target_ms,
+                    loss,
+                    s.underruns,
+                ),
             );
         }
     }
@@ -822,8 +835,8 @@ async fn command_loop(
 
 fn data_dir() -> PathBuf {
     std::env::var_os("LOCALAPPDATA")
-        .map(|d| PathBuf::from(d).join("GlassMic"))
-        .unwrap_or_else(|| std::env::temp_dir().join("GlassMic"))
+        .map(|d| PathBuf::from(d).join("CouchMic"))
+        .unwrap_or_else(|| std::env::temp_dir().join("CouchMic"))
 }
 
 fn init_logging(log_file: Option<&PathBuf>) {
@@ -852,7 +865,7 @@ fn init_logging(log_file: Option<&PathBuf>) {
 }
 
 /// Full path of tailscale.exe: the default install location, else the first match on PATH.
-/// Never a bare "tailscale", which Windows would also look up in glass-mic's own folder first.
+/// Never a bare "tailscale", which Windows would also look up in CouchMic's own folder first.
 fn tailscale_exe() -> Option<PathBuf> {
     if let Some(pf) = std::env::var_os("ProgramFiles") {
         let p = PathBuf::from(pf).join("Tailscale").join("tailscale.exe");
@@ -1001,7 +1014,7 @@ fn stdout_redirected() -> bool {
 
 #[tokio::main]
 pub async fn main() {
-    // Output already redirected (pipe or file, e.g. `glass-mic --list | ...` in a script): keep
+    // Output already redirected (pipe or file, e.g. `couchmic --list | ...` in a script): keep
     // it. Attaching to the parent console would point stdout at that console instead, and the
     // caller would read nothing (install.ps1 checks for VB-CABLE that way).
     // Otherwise, started from a terminal: attach to its console so --list and --help are
@@ -1045,7 +1058,7 @@ pub async fn main() {
         return;
     }
     if cli.watchdog && stopped_by_user() {
-        // The user quit from the tray; the watchdog must not bring glass-mic back.
+        // The user quit from the tray; the watchdog must not bring CouchMic back.
         return;
     }
     if !cli.watchdog {
@@ -1060,7 +1073,7 @@ pub async fn main() {
             // default microphone: a second instance must not restore the "previous" microphone
             // while the first one has an iPad connected.
             say_err(&format!(
-                "cannot listen on {addr}, is glass-mic already running? {e}"
+                "cannot listen on {addr}, is CouchMic already running? {e}"
             ));
             std::process::exit(4);
         }
@@ -1071,9 +1084,9 @@ pub async fn main() {
     let log_file = cli
         .log_file
         .clone()
-        .or_else(|| (!has_console).then(|| data_dir().join("glass-mic.log")));
+        .or_else(|| (!has_console).then(|| data_dir().join("couchmic.log")));
     init_logging(log_file.as_ref());
-    tracing::info!(version = env!("CARGO_PKG_VERSION"), "glass-mic starting");
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "CouchMic starting");
     let switch = match MicSwitch::new(&cli.mic_filter, data_dir().join("previous-mic.txt")) {
         Ok(m) => {
             if let Some(cur) = m.current_default_name() {
@@ -1182,6 +1195,7 @@ pub async fn main() {
         clients: Arc::new(Mutex::new(0)),
         switch: Arc::new(Mutex::new(switch)),
         switch_enabled: Arc::new(AtomicBool::new(!cli.no_switch)),
+        mic_active: Arc::new(AtomicBool::new(false)),
         restore_grace: Duration::from_secs(cli.restore_grace_secs),
         rtc_stats: Arc::new(Mutex::new(Default::default())),
         rtc_udp_addr: Arc::new(format!("0.0.0.0:{}", cli.rtc_port)),
@@ -1189,6 +1203,7 @@ pub async fn main() {
         tray: Arc::new(tray_handle),
         toast: !cli.no_toast,
         texts,
+        last_device: Arc::new(Mutex::new(Device::Other)),
         last_trouble: Arc::new(Mutex::new(None)),
         active_source: Arc::new(AtomicU64::new(0)),
         next_conn_id: Arc::new(AtomicU64::new(0)),
@@ -1212,7 +1227,7 @@ pub async fn main() {
     let (quit_tx, mut quit_rx) = tokio::sync::watch::channel(false);
     tokio::spawn(command_loop(state.clone(), cmd_rx, quit_tx));
 
-    tracing::info!(%addr, rtc_udp = %state.rtc_udp_addr, ui = %ui_url, "glass-mic listening");
+    tracing::info!(%addr, rtc_udp = %state.rtc_udp_addr, ui = %ui_url, "CouchMic listening");
 
     let shutdown_state = state.clone();
     axum::serve(listener, app)

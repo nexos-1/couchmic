@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "Glass Mic",
-  "short_name": "Glass Mic",
+  "name": "CouchMic",
+  "short_name": "CouchMic",
   "description": "iPad or iPhone microphone as a microphone for your Windows PC",
   "start_url": "/?autostart=1",
   "scope": "/",
