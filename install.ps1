@@ -6,14 +6,16 @@
   Install / update (default):
     1. Checks that VB-CABLE is installed ("CABLE Input" output device).
     2. Copies glass-mic.exe to %LOCALAPPDATA%\GlassMic (stops a running copy first).
-    3. Allows inbound UDP for WebRTC in the Windows firewall (one UAC prompt, only if the rule
-       is missing or points elsewhere).
+    3. Allows inbound UDP for WebRTC in the Windows firewall, from Tailscale addresses only
+       (one UAC prompt, only if the rule is missing or different).
     4. Registers a scheduled task: start at logon, plus a 5-minute watchdog that restarts
        glass-mic if it is not running. No admin rights needed.
-    5. Runs `tailscale serve` so the iPad reaches https://<pc>.<tailnet>.ts.net/.
+    5. Runs `tailscale serve` so the iPad reaches https://<pc>.<tailnet>.ts.net/. Refuses if
+       that address is already used for something else or Tailscale Funnel is on for it.
     6. Starts glass-mic and checks that it answers.
 
-  -Uninstall reverses all of it and restores the previous default microphone.
+  -Uninstall reverses all of it, restores the previous default microphone and removes only
+  glass-mic's own files.
 
   Re-running the script is safe; it updates an existing installation in place.
 
@@ -31,6 +33,8 @@ param(
     [string]$TaskName = 'GlassMic',
     [int]$Port = 8321,
     [int]$RtcPort = 8322,
+    # HTTPS port of `tailscale serve` (443, 8443 or 10000).
+    [int]$HttpsPort = 443,
     [string]$FirewallRuleName = 'Glass Mic (WebRTC UDP)',
     # Extra arguments for glass-mic, e.g. '--no-toast'.
     [string]$ExtraArgs = '',
@@ -38,7 +42,10 @@ param(
     [switch]$SkipTailscale,
     [switch]$Uninstall,
     # With -Uninstall: keep the log files.
-    [switch]$KeepLogs
+    [switch]$KeepLogs,
+    # Override the safety checks (unusual install folder, running as admin, existing
+    # tailscale serve config or Funnel on the HTTPS port).
+    [switch]$Force
 )
 
 Set-StrictMode -Version 2
@@ -48,12 +55,46 @@ function Write-Step([string]$text) { Write-Host "==> $text" -ForegroundColor Cya
 function Write-Ok([string]$text) { Write-Host "    $text" -ForegroundColor Green }
 function Write-Note([string]$text) { Write-Host "    $text" -ForegroundColor Yellow }
 
+# Files glass-mic creates in its folder; uninstall removes exactly these, nothing else.
+$OwnFiles = @('glass-mic.exe', 'glass-mic.log', 'glass-mic.log.1', 'previous-mic.txt',
+    'toast-icon.png', 'stopped-by-user', '.glass-mic-install')
+$MarkerName = '.glass-mic-install'
+# Tailscale address ranges (CGNAT IPv4 and the Tailscale ULA IPv6 prefix).
+$TailnetRanges = @('100.64.0.0/10', 'fd7a:115c:a1e0::/48')
+$FirewallDescription = 'glass-mic WebRTC audio, tailnet addresses only (managed by install.ps1)'
+
+# ------------------------------------------------------------------------------------------------
+# Safety checks
+
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator)
+if ($isAdmin -and -not $Force) {
+    throw 'Do not run this script as administrator: it installs for the current user (task, folder, microphone). Run it from a normal PowerShell window; it asks for admin rights itself only for the firewall rule. Use -Force to override.'
+}
+
+$InstallDir = [IO.Path]::GetFullPath($InstallDir).TrimEnd('\')
+$forbidden = @(
+    [IO.Path]::GetPathRoot($InstallDir).TrimEnd('\'),
+    $env:USERPROFILE, $env:LOCALAPPDATA, $env:APPDATA, $env:ProgramFiles, ${env:ProgramFiles(x86)},
+    $env:SystemRoot, $env:TEMP
+) | Where-Object { $_ } | ForEach-Object { [IO.Path]::GetFullPath($_).TrimEnd('\') }
+if ($forbidden -contains $InstallDir) {
+    throw "Refusing to use '$InstallDir' as the install folder."
+}
+if ((Split-Path $InstallDir -Leaf) -ne 'GlassMic' -and -not $Force) {
+    throw "The install folder should be named 'GlassMic' (got '$InstallDir'). Use -Force to override."
+}
+
 $installedExe = Join-Path $InstallDir 'glass-mic.exe'
 $logFile = Join-Path $InstallDir 'glass-mic.log'
+$ownUrl = "http://127.0.0.1:$Port"
+
+# ------------------------------------------------------------------------------------------------
+# Helpers
 
 function Stop-GlassMic {
     $procs = @(Get-CimInstance Win32_Process -Filter "Name='glass-mic.exe'" |
-        Where-Object { $_.ExecutablePath -and ($_.ExecutablePath -ieq $installedExe) })
+        Where-Object { $_.ExecutablePath -and ([IO.Path]::GetFullPath($_.ExecutablePath) -ieq $installedExe) })
     foreach ($p in $procs) {
         Stop-Process -Id $p.ProcessId -Force -Confirm:$false -ErrorAction SilentlyContinue
         Write-Ok "stopped running glass-mic (pid $($p.ProcessId))"
@@ -74,32 +115,94 @@ function Invoke-GlassMic([string]$path, [string[]]$arguments) {
     }
 }
 
+# Single-quoted PowerShell literal, safe for any content (also typographic quotes).
+function ConvertTo-PsLiteral([string]$value) {
+    return "'" + [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($value) + "'"
+}
+
 function Invoke-Elevated([string]$command) {
-    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
-        [Security.Principal.WindowsBuiltInRole]::Administrator)
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    $ps = Join-Path $PSHOME 'powershell.exe'
     if ($isAdmin) {
-        Invoke-Expression $command
+        & $ps -NoProfile -NonInteractive -EncodedCommand $encoded
+        if ($LASTEXITCODE -ne 0) { throw "command failed with exit code $LASTEXITCODE" }
         return
     }
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
-    $p = Start-Process powershell -Verb RunAs -Wait -PassThru -WindowStyle Hidden `
-        -ArgumentList '-NoProfile', '-EncodedCommand', $encoded
+    $p = Start-Process $ps -Verb RunAs -Wait -PassThru -WindowStyle Hidden `
+        -ArgumentList '-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded
     if ($p.ExitCode -ne 0) { throw "elevated command failed with exit code $($p.ExitCode)" }
 }
 
-function Get-TailscaleName {
-    $ts = Get-Command tailscale -ErrorAction SilentlyContinue
-    if (-not $ts) { return $null }
+# Exact-name firewall lookup (DisplayName accepts wildcards otherwise).
+function Get-OwnFirewallRule {
+    $name = [Management.Automation.WildcardPattern]::Escape($FirewallRuleName)
+    return @(Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue)
+}
+
+function Get-TailscaleExe {
+    $candidate = Join-Path $env:ProgramFiles 'Tailscale\tailscale.exe'
+    if (Test-Path $candidate) { return $candidate }
+    $cmd = Get-Command tailscale.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cmd) { return $cmd.Source }
+    return $null
+}
+
+# Runs tailscale without letting stderr output abort the script (PowerShell 5.1 turns
+# redirected stderr into terminating errors under ErrorActionPreference=Stop).
+function Invoke-Tailscale([string[]]$arguments) {
+    $ts = Get-TailscaleExe
+    if (-not $ts) { return [pscustomobject]@{ ExitCode = -1; Output = 'tailscale not found' } }
+    $old = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     try {
-        $status = & tailscale status --json 2>$null | ConvertFrom-Json
-        return ($status.Self.DNSName).TrimEnd('.')
-    } catch { return $null }
+        $out = & $ts @arguments 2>&1 | ForEach-Object { "$_" }
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $old
+    }
+    return [pscustomobject]@{ ExitCode = $code; Output = ($out -join "`n") }
+}
+
+function Get-TailscaleName {
+    $r = Invoke-Tailscale @('status', '--json')
+    if ($r.ExitCode -ne 0) { return $null }
+    try { return ((($r.Output | ConvertFrom-Json).Self.DNSName)).TrimEnd('.') } catch { return $null }
+}
+
+# Current `tailscale serve` state for our host and HTTPS port.
+function Get-ServeState([string]$dns) {
+    $state = [pscustomobject]@{ Root = $null; Funnel = $false; TcpForward = $false; Ok = $false }
+    $r = Invoke-Tailscale @('serve', 'status', '--json')
+    if ($r.ExitCode -ne 0) { return $state }
+    $state.Ok = $true
+    if (-not $r.Output.Trim()) { return $state }
+    $cfg = $r.Output | ConvertFrom-Json
+    $hostPort = "${dns}:$HttpsPort"
+    if ($cfg.PSObject.Properties['Web'] -and $cfg.Web.PSObject.Properties[$hostPort]) {
+        $handlers = $cfg.Web.$hostPort.Handlers
+        if ($handlers -and $handlers.PSObject.Properties['/']) {
+            $state.Root = $handlers.'/'
+        }
+    }
+    if ($cfg.PSObject.Properties['AllowFunnel'] -and $cfg.AllowFunnel.PSObject.Properties[$hostPort]) {
+        $state.Funnel = [bool]$cfg.AllowFunnel.$hostPort
+    }
+    if ($cfg.PSObject.Properties['TCP'] -and $cfg.TCP.PSObject.Properties["$HttpsPort"]) {
+        $tcp = $cfg.TCP."$HttpsPort"
+        $state.TcpForward = [bool]($tcp.PSObject.Properties['TCPForward'] -and $tcp.TCPForward)
+    }
+    return $state
+}
+
+function Test-OwnRoot($root) {
+    return $root -and $root.PSObject.Properties['Proxy'] -and ($root.Proxy -eq $ownUrl)
 }
 
 # ------------------------------------------------------------------------------------------------
 if ($Uninstall) {
     Write-Step "Stopping and removing the scheduled task '$TaskName'"
     if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+        Disable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Out-Null
         Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
         Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
         Write-Ok 'task removed'
@@ -114,33 +217,39 @@ if ($Uninstall) {
 
     if (-not $SkipFirewall) {
         Write-Step "Removing firewall rule '$FirewallRuleName'"
-        if (Get-NetFirewallRule -DisplayName $FirewallRuleName -ErrorAction SilentlyContinue) {
-            Invoke-Elevated "Remove-NetFirewallRule -DisplayName '$FirewallRuleName'"
+        if ((Get-OwnFirewallRule).Count -gt 0) {
+            Invoke-Elevated "Get-NetFirewallRule -DisplayName $(ConvertTo-PsLiteral ([Management.Automation.WildcardPattern]::Escape($FirewallRuleName))) | Remove-NetFirewallRule"
             Write-Ok 'rule removed'
         } else { Write-Ok 'no rule found' }
     }
 
-    if (-not $SkipTailscale -and (Get-Command tailscale -ErrorAction SilentlyContinue)) {
-        Write-Step 'Removing tailscale serve for glass-mic'
-        $serve = & tailscale serve status 2>$null | Out-String
-        if ($serve -match [regex]::Escape("http://127.0.0.1:$Port")) {
-            & tailscale serve --https=443 off | Out-Null
-            Write-Ok 'tailscale serve (https 443) turned off'
-        } else { Write-Ok 'tailscale serve does not point to glass-mic, left unchanged' }
+    if (-not $SkipTailscale -and (Get-TailscaleExe)) {
+        Write-Step "Removing glass-mic from tailscale serve (https port $HttpsPort)"
+        $dns = Get-TailscaleName
+        $state = if ($dns) { Get-ServeState $dns } else { $null }
+        if ($state -and (Test-OwnRoot $state.Root)) {
+            # Only our own mount "/", never other handlers on the port.
+            $r = Invoke-Tailscale @('serve', "--https=$HttpsPort", '--set-path=/', 'off')
+            if ($r.ExitCode -eq 0) { Write-Ok 'removed' } else { Write-Note "tailscale serve off failed: $($r.Output)" }
+        } else { Write-Ok 'glass-mic is not configured there, left unchanged' }
     }
 
     Write-Step 'Removing the notification app id'
     Remove-Item 'HKCU:\Software\Classes\AppUserModelId\GlassMic' -Recurse -ErrorAction SilentlyContinue
     Write-Ok 'done'
 
-    Write-Step "Removing $InstallDir"
+    Write-Step "Removing glass-mic's files from $InstallDir"
     if (Test-Path $InstallDir) {
-        if ($KeepLogs) {
-            Get-ChildItem $InstallDir -Exclude 'glass-mic.log*' | Remove-Item -Recurse -Force
-            Write-Ok 'removed (logs kept)'
+        foreach ($f in $OwnFiles) {
+            if ($KeepLogs -and $f -like 'glass-mic.log*') { continue }
+            $p = Join-Path $InstallDir $f
+            if (Test-Path -LiteralPath $p -PathType Leaf) { Remove-Item -LiteralPath $p -Force }
+        }
+        if (@(Get-ChildItem -LiteralPath $InstallDir -Force).Count -eq 0) {
+            Remove-Item -LiteralPath $InstallDir -Force
+            Write-Ok 'folder removed'
         } else {
-            Remove-Item $InstallDir -Recurse -Force
-            Write-Ok 'removed'
+            Write-Ok 'glass-mic files removed; other files in the folder were left untouched'
         }
     } else { Write-Ok 'not present' }
     Write-Host ''
@@ -171,37 +280,78 @@ if ("$devices" -notmatch 'CABLE Input') {
 }
 Write-Ok 'CABLE Input found'
 
+# Check tailscale serve before changing anything, so a conflict aborts cleanly.
+$tsName = $null
+$serveNeeded = $false
+if (-not $SkipTailscale) {
+    Write-Step "Checking tailscale serve (https port $HttpsPort)"
+    if (-not (Get-TailscaleExe)) {
+        Write-Note 'Tailscale is not installed. Install it (https://tailscale.com/download) on this PC and the iPad, then run this script again.'
+    } else {
+        $tsName = Get-TailscaleName
+        if (-not $tsName) {
+            Write-Note 'Tailscale is installed but not connected. Sign in, then run this script again.'
+        } else {
+            $state = Get-ServeState $tsName
+            if ($state.Funnel -and -not $Force) {
+                throw "Tailscale Funnel is ON for ${tsName}:$HttpsPort, which would make glass-mic reachable from the internet (glass-mic rejects Funnel requests, but do not rely on that). Turn Funnel off for this port (tailscale funnel --https=$HttpsPort off) or use another -HttpsPort."
+            }
+            if ($state.TcpForward -and -not $Force) {
+                throw "Port $HttpsPort of $tsName is already used as a TCP forward in tailscale serve. Use another -HttpsPort or -Force."
+            }
+            if ($state.Root -and -not (Test-OwnRoot $state.Root) -and -not $Force) {
+                throw "https://${tsName}:$HttpsPort/ already serves something else in tailscale serve. glass-mic will not replace it. Use another -HttpsPort or -Force."
+            }
+            $serveNeeded = -not (Test-OwnRoot $state.Root)
+            Write-Ok ($(if ($serveNeeded) { 'free, will be configured' } else { 'already points to glass-mic' }))
+        }
+    }
+}
+
 Write-Step "Installing to $InstallDir"
+if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+    # Keep the watchdog from restarting the old exe while it is being replaced.
+    Disable-ScheduledTask -TaskName $TaskName | Out-Null
+}
 Stop-GlassMic
 New-Item -ItemType Directory -Force $InstallDir | Out-Null
-if ($Exe -ine $installedExe) { Copy-Item $Exe $installedExe -Force }
+if ($Exe -ine $installedExe) { Copy-Item -LiteralPath $Exe -Destination $installedExe -Force }
+Set-Content -LiteralPath (Join-Path $InstallDir $MarkerName) -Value 'glass-mic install folder (used by install.ps1 -Uninstall)' -Encoding ascii
 Write-Ok $installedExe
 
 if (-not $SkipFirewall) {
-    Write-Step "Firewall: inbound UDP $RtcPort for glass-mic (WebRTC)"
-    $existing = Get-NetFirewallRule -DisplayName $FirewallRuleName -ErrorAction SilentlyContinue
+    Write-Step "Firewall: inbound UDP $RtcPort for glass-mic, from Tailscale addresses only"
+    $existing = Get-OwnFirewallRule
     $ruleOk = $false
-    if ($existing) {
-        $portFilter = ($existing | Get-NetFirewallPortFilter)
-        $appFilter = ($existing | Get-NetFirewallApplicationFilter)
-        $ruleOk = ($existing.Enabled -eq 'True') -and ($existing.Direction -eq 'Inbound') -and
-            ($existing.Action -eq 'Allow') -and ($portFilter.Protocol -eq 'UDP') -and
-            ("$($portFilter.LocalPort)" -eq "$RtcPort") -and ($appFilter.Program -ieq $installedExe)
+    if ($existing.Count -eq 1) {
+        $r0 = $existing[0]
+        $portFilter = ($r0 | Get-NetFirewallPortFilter)
+        $appFilter = ($r0 | Get-NetFirewallApplicationFilter)
+        $ruleOk = ($r0.Enabled -eq 'True') -and ($r0.Direction -eq 'Inbound') -and
+            ($r0.Action -eq 'Allow') -and ($portFilter.Protocol -eq 'UDP') -and
+            ("$($portFilter.LocalPort)" -eq "$RtcPort") -and ($appFilter.Program -ieq $installedExe) -and
+            ($r0.Description -eq $FirewallDescription)
     }
     if ($ruleOk) {
         Write-Ok 'rule already present'
     } else {
-        Write-Note 'Windows asks for admin rights once to add the firewall rule.'
-        $cmd = "Remove-NetFirewallRule -DisplayName '$FirewallRuleName' -ErrorAction SilentlyContinue; " +
-            "New-NetFirewallRule -DisplayName '$FirewallRuleName' -Direction Inbound -Action Allow " +
-            "-Protocol UDP -LocalPort $RtcPort -Program '$installedExe' -Profile Any | Out-Null"
+        Write-Note 'Windows asks for admin rights once to set the firewall rule.'
+        $nameLit = ConvertTo-PsLiteral $FirewallRuleName
+        $nameEsc = ConvertTo-PsLiteral ([Management.Automation.WildcardPattern]::Escape($FirewallRuleName))
+        $cmd = "`$ErrorActionPreference = 'Stop'; " +
+            "Get-NetFirewallRule -DisplayName $nameEsc -ErrorAction SilentlyContinue | Remove-NetFirewallRule; " +
+            "New-NetFirewallRule -DisplayName $nameLit -Description $(ConvertTo-PsLiteral $FirewallDescription) " +
+            "-Direction Inbound -Action Allow -Protocol UDP -LocalPort $RtcPort " +
+            "-RemoteAddress $(($TailnetRanges | ForEach-Object { ConvertTo-PsLiteral $_ }) -join ',') " +
+            "-Program $(ConvertTo-PsLiteral $installedExe) -Profile Any | Out-Null"
         Invoke-Elevated $cmd
-        Write-Ok 'rule added'
+        Write-Ok 'rule set'
     }
 }
 
 Write-Step "Scheduled task '$TaskName' (at logon, watchdog every 5 minutes)"
-$argList = "--device `"CABLE Input`" --port $Port --rtc-port $RtcPort --log-file `"$logFile`""
+$argList = "--watchdog --device `"CABLE Input`" --port $Port --rtc-port $RtcPort --log-file `"$logFile`""
+if ($tsName -and $HttpsPort -ne 443) { $argList = "$argList --allow-origin https://${tsName}:$HttpsPort" }
 if ($ExtraArgs) { $argList = "$argList $ExtraArgs" }
 $action = New-ScheduledTaskAction -Execute $installedExe -Argument $argList -WorkingDirectory $InstallDir
 $user = "$env:USERDOMAIN\$env:USERNAME"
@@ -218,36 +368,39 @@ Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $triggers -S
     -Force | Out-Null
 Write-Ok 'registered'
 
-$tsName = $null
-if (-not $SkipTailscale) {
-    Write-Step "Tailscale: https://<this pc>/ -> http://127.0.0.1:$Port"
-    if (-not (Get-Command tailscale -ErrorAction SilentlyContinue)) {
-        Write-Note 'Tailscale is not installed. Install it (https://tailscale.com/download) on this PC and the iPad, then run this script again.'
-    } else {
-        $tsName = Get-TailscaleName
-        & tailscale serve --bg --https=443 "http://127.0.0.1:$Port" 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Write-Note 'tailscale serve failed. Enable MagicDNS and HTTPS certificates in the Tailscale admin console (DNS page), then run this script again.'
-        } else { Write-Ok 'tailscale serve configured' }
-    }
+if ($serveNeeded) {
+    Write-Step "Tailscale: https://${tsName}:$HttpsPort/ -> $ownUrl"
+    $r = Invoke-Tailscale @('serve', '--bg', "--https=$HttpsPort", $ownUrl)
+    if ($r.Output) { $r.Output -split "`n" | ForEach-Object { if ($_.Trim()) { Write-Host "    $_" } } }
+    $after = Get-ServeState $tsName
+    if ($r.ExitCode -ne 0 -or -not (Test-OwnRoot $after.Root)) {
+        Write-Note 'tailscale serve is not configured. Enable MagicDNS and HTTPS certificates in the Tailscale admin console (DNS page), then run this script again.'
+    } else { Write-Ok 'configured (tailnet only)' }
 }
 
 Write-Step 'Starting glass-mic'
+Remove-Item -LiteralPath (Join-Path $InstallDir 'stopped-by-user') -ErrorAction SilentlyContinue
 Start-ScheduledTask -TaskName $TaskName
 $ok = $false
 for ($i = 0; $i -lt 20; $i++) {
     Start-Sleep -Milliseconds 500
     try {
-        $stats = Invoke-RestMethod "http://127.0.0.1:$Port/api/stats" -TimeoutSec 2
-        $ok = $true; break
+        $stats = Invoke-RestMethod "$ownUrl/api/stats" -TimeoutSec 2
+        $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$($stats.pid)"
+        if ($proc -and $proc.ExecutablePath -and ([IO.Path]::GetFullPath($proc.ExecutablePath) -ieq $installedExe)) {
+            $ok = $true; break
+        }
     } catch { }
 }
-if (-not $ok) { throw "glass-mic did not answer on port $Port. See $logFile" }
+if (-not $ok) {
+    throw "The installed glass-mic did not answer on port $Port (another program may use it). See $logFile"
+}
 Write-Ok "running, version $($stats.version), output: $($stats.device)"
 
 Write-Host ''
 if ($tsName) {
-    Write-Host "Open on the iPad (Safari, Tailscale connected):  https://$tsName/" -ForegroundColor Green
+    $url = if ($HttpsPort -eq 443) { "https://$tsName/" } else { "https://${tsName}:$HttpsPort/" }
+    Write-Host "Open on the iPad (Safari, Tailscale connected):  $url" -ForegroundColor Green
 } else {
-    Write-Host "glass-mic runs on http://127.0.0.1:$Port/ . The iPad needs HTTPS, see README (Tailscale)." -ForegroundColor Green
+    Write-Host "glass-mic runs on $ownUrl/ . The iPad needs HTTPS, see README (Tailscale)." -ForegroundColor Green
 }

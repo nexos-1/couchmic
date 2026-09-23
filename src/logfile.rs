@@ -1,6 +1,10 @@
-//! Log file rotation. glass-mic appends to one file; at startup a file larger than the limit is
-//! moved to `<name>.1` (replacing an older one), so at most two files of bounded size remain.
+//! Log file with size-based rotation. glass-mic appends to one file; once it grows beyond the
+//! limit it is moved to `<name>.1` (replacing an older one) and a new file is started, so at most
+//! two files of bounded size remain. The check runs on every write, not only at startup, so a
+//! long run cannot fill the disk.
 
+use std::fs::{File, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 fn rotated_path(path: &Path) -> PathBuf {
@@ -25,6 +29,63 @@ pub fn rotate_if_larger(path: &Path, max_bytes: u64) -> std::io::Result<bool> {
     }
     std::fs::rename(path, &old)?;
     Ok(true)
+}
+
+fn open_append(path: &Path) -> std::io::Result<File> {
+    OpenOptions::new().create(true).append(true).open(path)
+}
+
+/// Append-only log file that rotates itself when it grows beyond `max_bytes`.
+pub struct RotatingFile {
+    path: PathBuf,
+    max_bytes: u64,
+    file: Option<File>,
+    written: u64,
+}
+
+impl RotatingFile {
+    pub fn open(path: PathBuf, max_bytes: u64) -> std::io::Result<Self> {
+        rotate_if_larger(&path, max_bytes)?;
+        let file = open_append(&path)?;
+        let written = file.metadata().map(|m| m.len()).unwrap_or(0);
+        Ok(Self {
+            path,
+            max_bytes,
+            file: Some(file),
+            written,
+        })
+    }
+
+    fn rotate(&mut self) {
+        // Close first: renaming a file that is still open is not reliable on every setup.
+        self.file = None;
+        let _ = rotate_if_larger(&self.path, 0);
+        self.file = open_append(&self.path).ok();
+        self.written = 0;
+    }
+}
+
+impl Write for RotatingFile {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.written + buf.len() as u64 > self.max_bytes && self.written > 0 {
+            self.rotate();
+        }
+        let Some(f) = self.file.as_mut() else {
+            // Reopening failed (disk full, file locked): drop the line instead of failing the
+            // program. Logging must never take glass-mic down.
+            return Ok(buf.len());
+        };
+        let n = f.write(buf)?;
+        self.written += n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self.file.as_mut() {
+            Some(f) => f.flush(),
+            None => Ok(()),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -54,6 +115,24 @@ mod tests {
             b"0123456789abc",
             "older rotation is replaced"
         );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn rotates_while_running_and_stays_bounded() {
+        let d = temp_dir("runtime");
+        let log = d.join("glass-mic.log");
+        let mut f = RotatingFile::open(log.clone(), 100).unwrap();
+        for _ in 0..50 {
+            f.write_all(b"0123456789012345678\n").unwrap(); // 20 bytes per line
+        }
+        f.flush().unwrap();
+        let cur = std::fs::metadata(&log).unwrap().len();
+        let old = std::fs::metadata(d.join("glass-mic.log.1")).unwrap().len();
+        assert!(cur <= 100, "current file bounded: {cur}");
+        assert!(old <= 100, "rotated file bounded: {old}");
+        assert!(!d.join("glass-mic.log.2").exists());
+        drop(f);
         let _ = std::fs::remove_dir_all(&d);
     }
 }

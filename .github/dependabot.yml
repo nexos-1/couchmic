@@ -1,0 +1,18 @@
+# Update proposals for dependencies and GitHub Actions. The cooldown keeps new versions out
+# until they are at least 14 days old (supply-chain rule of this project).
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    open-pull-requests-limit: 5

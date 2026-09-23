@@ -58,7 +58,7 @@ impl PeerConnectionEventHandler for Handler {
     async fn on_connection_state_change(&self, state: RTCPeerConnectionState) {
         tracing::info!(?state, "rtc connection state");
         // A superseded connection must not overwrite the state of the active one.
-        if self.gate.allowed() {
+        if self.gate.is_active() {
             let mut s = self.stats.lock().unwrap();
             s.connected = matches!(state, RTCPeerConnectionState::Connected);
         }
@@ -88,6 +88,7 @@ async fn decode_loop(
     let mut pcm = vec![0i16; 5760]; // up to 120 ms at 48 kHz
     let mut expected: Option<u16> = None;
     let mut last_frame: usize = 960; // 20 ms default, updated from the packets
+    let mut claimed = false;
     tracing::info!("rtc audio track: opus decoder ready");
     {
         buffer.lock().unwrap().set_input_rate(48_000);
@@ -97,9 +98,17 @@ async fn decode_loop(
             TrackRemoteEvent::OnRtpPacket(pkt) => {
                 let seq = pkt.header.sequence_number;
                 let payload: &[u8] = &pkt.payload;
-                // Superseded (another device is sending): decode nothing, but track the
+                // The first RTP packet proves the peer connection works: only now take over the
+                // source (a failed or bogus offer must not silence the device that is playing).
+                // Superseded later (another device is sending): decode nothing, but track the
                 // sequence so the pause does not count as loss when this source comes back.
-                if !gate.allowed() {
+                if !claimed {
+                    claimed = true;
+                    gate.take_over();
+                    let mut s = stats.lock().unwrap();
+                    *s = RtcStats::default();
+                    s.connected = true;
+                } else if !gate.allowed() {
                     expected = Some(seq.wrapping_add(1));
                     continue;
                 }

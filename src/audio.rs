@@ -196,10 +196,14 @@ impl JitterBuffer {
             let _ = r.set_resample_ratio_relative(rel, true);
         }
 
-        while self.pending.len() >= CHUNK {
+        // Walk the pending samples with an offset and drain once at the end: draining CHUNK
+        // samples from the front on every step would copy the rest each time (quadratic).
+        let mut start = 0;
+        while self.pending.len() - start >= CHUNK {
+            let block = start..start + CHUNK;
             let produced = match self.resampler.as_mut() {
                 Some(r) => {
-                    let input = InterleavedSlice::new(&self.pending[..CHUNK], 1, CHUNK);
+                    let input = InterleavedSlice::new(&self.pending[block.clone()], 1, CHUNK);
                     let out_len = self.scratch.len();
                     let output = InterleavedSlice::new_mut(&mut self.scratch[..], 1, out_len);
                     match (input, output) {
@@ -217,13 +221,17 @@ impl JitterBuffer {
                 }
                 None => {
                     // No resampler (should not happen): pass through 1:1.
-                    self.scratch[..CHUNK].copy_from_slice(&self.pending[..CHUNK]);
+                    if self.scratch.len() < CHUNK {
+                        self.scratch.resize(CHUNK, 0.0);
+                    }
+                    self.scratch[..CHUNK].copy_from_slice(&self.pending[block]);
                     CHUNK
                 }
             };
             self.queue.extend(self.scratch[..produced].iter().copied());
-            self.pending.drain(..CHUNK);
+            start += CHUNK;
         }
+        self.pending.drain(..start);
 
         let max_samples = (self.max_ms / 1000.0 * self.output_rate as f64) as usize;
         if self.queue.len() > max_samples {
@@ -312,6 +320,11 @@ impl SourceGate {
         if prev != 0 && prev != self.id {
             tracing::info!(from = prev, to = self.id, "new audio source takes over");
         }
+    }
+
+    /// Is this connection the active source right now? Does not claim anything.
+    pub fn is_active(&self) -> bool {
+        self.active.load(Ordering::Acquire) == self.id
     }
 
     /// May this connection play right now? If nobody is active, it becomes active.
@@ -426,6 +439,26 @@ mod tests {
         assert!(iphone.release());
         let ipad_again = SourceGate::new(active.clone(), 3);
         assert!(ipad_again.allowed());
+    }
+
+    #[test]
+    fn large_push_is_linear() {
+        // 10 s of audio in one push must not take quadratic time (it took minutes before).
+        let mut jb = JitterBuffer::new(48_000, 40.0, 20_000.0);
+        let t = std::time::Instant::now();
+        jb.push_i16(&vec![100i16; 480_000]);
+        assert!(t.elapsed().as_secs_f64() < 5.0, "{:?}", t.elapsed());
+        assert!(jb.buffered_ms() > 9_000.0, "{}", jb.buffered_ms());
+    }
+
+    #[test]
+    fn is_active_does_not_claim() {
+        let active = Arc::new(AtomicU64::new(0));
+        let g = SourceGate::new(active.clone(), 7);
+        assert!(!g.is_active());
+        assert_eq!(active.load(Ordering::Acquire), 0);
+        g.take_over();
+        assert!(g.is_active());
     }
 
     #[test]

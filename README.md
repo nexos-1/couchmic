@@ -76,7 +76,8 @@ The binary is not code-signed yet, so Windows SmartScreen may warn on first star
 - The **Advanced** section on the page shows path, latency, buffer, loss and underruns.
 - Test without speaking: `https://<pc>.<tailnet>.ts.net/?tone=1` sends a 440 Hz tone.
 - Tray menu: status, "Switch default microphone automatically" (on/off), open web page, open log
-  folder, quit.
+  folder, quit. After "Quit" the watchdog leaves glass-mic stopped until the next Windows start
+  (or until you start `glass-mic.exe` by hand).
 
 ## Command line
 
@@ -91,6 +92,7 @@ The binary is not code-signed yet, so Windows SmartScreen may warn on first star
 | `--rtc-port <n>` | `8322` | UDP port for WebRTC (needs the firewall rule) |
 | `--target-ms <ms>` | `40` | Jitter buffer target |
 | `--allow-origin <url>` | | Allow another origin, e.g. your own HTTPS reverse proxy |
+| `--allow-any-tailnet-user` | off | Accept every tailnet user, not only the PC's owner |
 | `--no-tray`, `--no-toast` | off | No tray icon, no notifications |
 | `--log-file <path>` | see below | Log file (rotated at 5 MB) |
 | `--list` | | List output devices |
@@ -107,17 +109,29 @@ does exactly that. The WebSocket protocol is documented in [docs/PROTOCOL.md](do
 
 ## Security and privacy
 
-- glass-mic only listens on `127.0.0.1`. Other devices reach it only through `tailscale serve`,
-  that is, only from your own tailnet. Traffic runs inside Tailscale's WireGuard tunnel; the
-  WebRTC audio is additionally encrypted with DTLS-SRTP.
-- Every request is checked against a host allowlist (against DNS rebinding) and browsers must
-  come from the glass-mic page itself (origin check against cross-site WebSockets). Rejected
-  requests get 403 and a warning in the log.
+- The web server (page, WebSocket, `/api/stats`) only listens on `127.0.0.1`. Other devices
+  reach it only through `tailscale serve`, that is, only from your own tailnet.
+- Only your own Tailscale user gets in: requests forwarded by `tailscale serve` must carry the
+  `Tailscale-User-Login` of the PC's owner (Tailscale sets and protects that header). Other
+  users of a shared tailnet and tagged devices are rejected; `--allow-any-tailnet-user`
+  turns this off.
+- **Tailscale Funnel is always rejected.** Funnel works per port, so turning it on for port 443
+  for anything else would otherwise publish glass-mic to the internet; `install.ps1` also refuses
+  to set up while Funnel is on for that port.
+- Browsers must come from the glass-mic page itself: host allowlist (against DNS rebinding),
+  origin check (against cross-site WebSockets), `Sec-Fetch-Site` (against links and embeds from
+  other sites) and `frame-ancestors 'none'` (the page cannot be framed). Rejected requests get
+  403 and a rate-limited warning in the log.
+- WebRTC audio uses UDP 8322 while a session runs. The firewall rule from `install.ps1` allows it
+  only from Tailscale addresses (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`), so audio always runs
+  inside the WireGuard tunnel and is additionally DTLS-SRTP encrypted. ICE and DTLS only accept
+  the peer that did the offer/answer exchange over the protected WebSocket.
+- Limits against misuse: messages up to 64 KiB, 4 connections, audio blocks up to 100 ms, one
+  active audio source, idle connections closed after 2 minutes, client log messages cut and
+  rate-limited, log files rotated at 5 MB.
 - There is no account and no cloud. Audio goes from the iPad to your PC and nowhere else. The
-  page sends a few status events (visibility, connection state) to the PC; they only end up in
-  the local log file.
-- Anyone in your tailnet who can open the page can use the microphone path. If you share your
-  tailnet, restrict access with [Tailscale ACLs](https://tailscale.com/kb/1018/acls).
+  page sends a few status events (visibility, connection state, browser user agent) to the PC;
+  they only end up in the local log file.
 
 Report security issues as described in [SECURITY.md](SECURITY.md).
 
@@ -160,4 +174,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 MIT, see [LICENSE](LICENSE). Release binaries include third-party code (libopus BSD-3-Clause,
 Rust crates under MIT/Apache-2.0/BSD/ISC); their notices ship as `THIRD-PARTY-LICENSES.html`.
 VB-CABLE is a separate product by VB-Audio and is not included. Tailscale is a trademark of
-Tailscale Inc.; glass-mic is not affiliated with Tailscale, VB-Audio or Apple.
+Tailscale Inc.; iPad, iPhone and Safari are trademarks of Apple Inc.; Windows is a trademark of
+Microsoft Corporation. glass-mic is not affiliated with any of them.

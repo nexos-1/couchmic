@@ -12,8 +12,11 @@ your own sender (a native app, another browser page) or read the status from a s
 | `GET /ws` | WebSocket: signaling, control and PCM audio |
 | `GET /api/stats` | Status as JSON (see below) |
 
-All routes require an allowed `Host` header; browser requests with an `Origin` header must come
-from an allowed origin (see [SECURITY.md](../SECURITY.md)). Otherwise the answer is `403`.
+All routes require an allowed `Host` header; an `Origin` header must be an allowed origin;
+`Sec-Fetch-Site` must be absent, `none` or `same-origin`; requests through `tailscale serve`
+must come from the PC's own Tailscale user; Funnel requests are always rejected (see
+[SECURITY.md](../SECURITY.md)). Otherwise the answer is `403`. Every response carries
+`Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY`.
 
 ## Page parameters
 
@@ -29,6 +32,11 @@ from an allowed origin (see [SECURITY.md](../SECURITY.md)). Otherwise the answer
 
 One connection per sender. Text frames are JSON control messages, binary frames are PCM audio.
 
+Limits: messages and frames up to 64 KiB, text messages up to 16 KiB (larger ones are ignored),
+at most 4 connections (the 5th gets HTTP 503). A connection only counts as a client (and switches
+the default microphone) once it sends a PCM frame or an `offer`. It is closed after 2 minutes
+without messages unless its WebRTC audio is still flowing.
+
 ### Sender to glass-mic
 
 | Message | Meaning |
@@ -36,7 +44,7 @@ One connection per sender. Text frames are JSON control messages, binary frames 
 | `{"type":"hello","ua":"...","standalone":false}` | First message; logged |
 | `{"type":"ping","t":123.4}` | Latency probe; `t` is echoed back |
 | `{"type":"offer","sdp":"..."}` | WebRTC offer with one audio track. Non-trickle: the SDP must contain the ICE candidates (the page waits for gathering to complete) |
-| `{"type":"log", ...}` | Free-form telemetry, written to the local log only |
+| `{"type":"log", ...}` | Telemetry; only the fields `ev vis standalone ctx running path state ice code reason enabled ready muted ua t` are logged (cut to 200 characters, escaped, at most 20 per 10 s) |
 
 ### glass-mic to sender
 
@@ -59,17 +67,18 @@ Binary frames: an 8-byte little-endian header followed by 16-bit samples.
 
 | Offset | Type | Field |
 | --- | --- | --- |
-| 0 | u32 LE | sample rate (8000 to 192000) |
+| 0 | u32 LE | sample rate (8000 to 192000), fixed for the connection after the first frame |
 | 4 | u16 LE | channels (1 to 8; only the first channel is used) |
 | 6 | u16 LE | sequence number (wraps) |
 | 8 | i16 LE[] | interleaved samples, 10 ms per frame recommended |
 
-Frames with an invalid header are dropped.
+Frames with an invalid header, a changed sample rate or more than 100 ms of audio are dropped.
 
 ### Several senders
 
 Only one connection plays at a time. A connection becomes the active source when it sends its
-first PCM frame or its WebRTC offer (the newest wins). When the active connection closes, the
+first PCM frame or when its first WebRTC audio packet arrives (the newest wins); an offer alone
+does not take over. When the active connection closes, the
 next connection that sends becomes active.
 
 ## `/api/stats`
@@ -77,6 +86,7 @@ next connection that sends becomes active.
 ```json
 {
   "version": "0.1.0",
+  "pid": 1234,
   "device": "CABLE Input (VB-Audio Virtual Cable)",
   "clients": 1,
   "mic_switched": true,

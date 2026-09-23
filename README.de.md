@@ -52,13 +52,22 @@ Das Programm ist noch nicht code-signiert; Windows SmartScreen warnt beim ersten
 
 ## Sicherheit und Datenschutz
 
-glass-mic lauscht nur auf `127.0.0.1` und ist nur über `tailscale serve` aus dem eigenen Tailnet
-erreichbar. Fremde Webseiten werden per Origin- und Host-Prüfung abgewiesen. Kein Konto, keine
-Cloud: Das Audio geht vom iPad zum PC und sonst nirgendwohin. Details in [README.md](README.md)
-und [SECURITY.md](SECURITY.md).
+- Der Webserver lauscht nur auf `127.0.0.1` und ist nur über `tailscale serve` aus dem eigenen
+  Tailnet erreichbar, und dort nur für den eigenen Tailscale-Nutzer des PCs (andere Nutzer eines
+  geteilten Tailnets werden abgewiesen).
+- **Tailscale Funnel wird immer abgewiesen**, `install.ps1` richtet bei aktivem Funnel nichts ein.
+- Fremde Webseiten werden per Host-, Origin- und `Sec-Fetch-Site`-Prüfung abgewiesen; die Seite
+  lässt sich nicht einbetten.
+- WebRTC-Audio (UDP 8322) lässt die Firewall-Regel nur von Tailscale-Adressen zu.
+- Kein Konto, keine Cloud: Das Audio geht vom iPad zum PC und sonst nirgendwohin. Ein paar
+  Statusmeldungen der Seite (inklusive User-Agent) landen nur im lokalen Log.
+
+Details in [README.md](README.md) und [SECURITY.md](SECURITY.md).
 
 ## Lizenz
 
 MIT, siehe [LICENSE](LICENSE). Hinweise zu enthaltener Fremdsoftware (u.a. libopus) liegen dem
 Release als `THIRD-PARTY-LICENSES.html` bei. VB-CABLE ist ein eigenes Produkt von VB-Audio und
-nicht enthalten.
+nicht enthalten. Tailscale ist eine Marke der Tailscale Inc., iPad, iPhone und Safari sind Marken
+der Apple Inc., Windows ist eine Marke der Microsoft Corporation; glass-mic steht mit keinem
+dieser Unternehmen in Verbindung.

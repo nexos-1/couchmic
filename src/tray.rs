@@ -95,9 +95,10 @@ fn dot_icon(rgb: [u8; 3]) -> Icon {
 }
 
 fn open_in_shell(target: &str) {
-    let _ = std::process::Command::new("explorer.exe")
-        .arg(target)
-        .spawn();
+    // Full path: a bare "explorer.exe" would also be looked up in glass-mic's own folder first.
+    let windir = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+    let explorer = std::path::PathBuf::from(windir).join("explorer.exe");
+    let _ = std::process::Command::new(explorer).arg(target).spawn();
 }
 
 /// Starts the tray thread. `ui_url` opens on a click on the icon.

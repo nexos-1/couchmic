@@ -11,7 +11,9 @@ issue first so we can agree on the approach.
 - `cargo deny check` for licenses, advisories and sources.
 - Try it end to end: run `target\release\glass-mic.exe --no-switch --port 8391 --rtc-port 8392`
   and open `http://127.0.0.1:8391/?tone=1` in Chrome or Edge (a test tone instead of the
-  microphone), or use your iPad through `tailscale serve`.
+  microphone), or use your iPad through `tailscale serve`. When Windows asks whether to allow
+  the development build through the firewall, choose **Cancel**: that prompt creates broad
+  rules for all ports (the installed copy gets a narrow rule from `install.ps1`).
 
 ## Rules
 

@@ -12,7 +12,11 @@ First public version.
 - Adaptive jitter buffer with drift compensation (sinc resampler).
 - Switches the Windows default microphone to CABLE Output while connected and restores it
   afterwards, also after a crash (`--restore-mic`).
-- Access control: host allowlist (DNS rebinding) and origin check (cross-site WebSockets).
+- Access control: host allowlist (DNS rebinding), origin check (cross-site WebSockets),
+  `Sec-Fetch-Site` and frame headers, only the PC's own Tailscale user through `tailscale serve`
+  (`--allow-any-tailnet-user` to widen), Tailscale Funnel always rejected.
+- Resource limits: 64 KiB messages, 4 connections, 100 ms PCM blocks, idle timeout, rate-limited
+  and sanitised client logs; firewall rule limited to Tailscale addresses.
 - One active audio source at a time; the newest sender takes over.
 - Tray icon, Windows notifications under their own app id, German and English UI.
 - Log file with rotation at 5 MB; stats are only logged while a client is connected.
