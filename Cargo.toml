@@ -60,7 +60,7 @@ windows = { version = "0.62.2", features = [
     "Win32_Storage_FileSystem",
 ] }
 # windows-core is required by the #[interface] macro (IPolicyConfig)
-windows-core = "0.62.2"
+windows-core = "0.100.0"
 # async-trait 0.1.92 (2026-08-08), for the PeerConnectionEventHandler
 async-trait = "0.1.92"
 
