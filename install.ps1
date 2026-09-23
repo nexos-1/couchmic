@@ -58,7 +58,7 @@ function Write-Note([string]$text) { Write-Host "    $text" -ForegroundColor Yel
 # Files CouchMic creates; uninstall removes exactly these, nothing else. The program files live
 # in the install folder, the state always in %LOCALAPPDATA%\CouchMic (the data folder).
 $OwnFiles = @('couchmic.exe', 'couchmic.log', 'couchmic.log.1', '.couchmic-install')
-$OwnDataFiles = @('previous-mic.txt', 'toast-icon.png')
+$OwnDataFiles = @('previous-mic.txt', 'previous-mic.lock', 'toast-icon.png')
 $MarkerName = '.couchmic-install'
 # Tailscale address ranges (CGNAT IPv4 and the Tailscale ULA IPv6 prefix).
 $TailnetRanges = @('100.64.0.0/10', 'fd7a:115c:a1e0::/48')

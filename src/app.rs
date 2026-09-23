@@ -1047,9 +1047,13 @@ pub async fn main() {
         // MicSwitch::new restores from the state file when the target is still the default.
         let state = data_dir().join("previous-mic.txt");
         let had_state = state.exists();
-        match MicSwitch::new(&cli.mic_filter, state) {
+        match MicSwitch::new(&cli.mic_filter, state, true) {
             Ok(_) if had_state => say("previous microphone checked and restored if needed"),
             Ok(_) => say("nothing to restore"),
+            // The running instance restores by itself when its last client leaves.
+            Err(e) if crate::micswitch::is_locked_by_other(&e) => {
+                say("CouchMic is running and manages the microphone itself, nothing to restore")
+            }
             Err(e) => {
                 say_err(&format!("cannot access audio endpoints: {e}"));
                 std::process::exit(5);
@@ -1087,7 +1091,11 @@ pub async fn main() {
         .or_else(|| (!has_console).then(|| data_dir().join("couchmic.log")));
     init_logging(log_file.as_ref());
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "CouchMic starting");
-    let switch = match MicSwitch::new(&cli.mic_filter, data_dir().join("previous-mic.txt")) {
+    let switch = match MicSwitch::new(
+        &cli.mic_filter,
+        data_dir().join("previous-mic.txt"),
+        !cli.no_switch,
+    ) {
         Ok(m) => {
             if let Some(cur) = m.current_default_name() {
                 tracing::info!(current = %cur, "default microphone at startup");

@@ -175,6 +175,40 @@ pub struct MicSwitch {
     /// File holding the target and the remembered previous microphones. If the process dies
     /// (crash, Stop-Process, logoff), the next start restores from it.
     state_file: PathBuf,
+    /// Held while this process manages the default microphone, see SwitchLock.
+    lock: Option<SwitchLock>,
+}
+
+/// Only one CouchMic process may manage the default microphone, whatever port it runs on:
+/// otherwise a second instance would find the state file of the running one and "restore" the
+/// microphone under a connected iPad. The lock is a file next to the state file, opened without
+/// sharing; Windows releases it when the process ends, also after a crash or a hard kill, so the
+/// next start can still recover.
+pub struct SwitchLock {
+    _file: std::fs::File,
+}
+
+impl SwitchLock {
+    pub fn try_acquire(state_file: &Path) -> Option<Self> {
+        use std::os::windows::fs::OpenOptionsExt;
+        if let Some(dir) = state_file.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .share_mode(0)
+            .open(state_file.with_extension("lock"))
+            .ok()
+            .map(|f| SwitchLock { _file: f })
+    }
+}
+
+/// Another CouchMic process manages the default microphone.
+pub fn is_locked_by_other(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::WouldBlock
 }
 
 /// State file: one line `T<TAB>id<TAB>name` for the target, then `role<TAB>id<TAB>name` per role.
@@ -246,17 +280,33 @@ fn role_of(idx: i32) -> ERole {
 }
 
 impl MicSwitch {
-    pub fn new(target_filter: &str, state_file: PathBuf) -> std::io::Result<Self> {
+    /// With `manage` the lock is taken right away and a crashed run is recovered; fails with
+    /// WouldBlock if another CouchMic process manages the microphone. Without it (--no-switch)
+    /// nothing is touched until activate() is first called, which takes the lock then.
+    pub fn new(target_filter: &str, state_file: PathBuf, manage: bool) -> std::io::Result<Self> {
         // Check early whether COM and the enumerator are available.
         let _com = ComGuard::new();
         let en = enumerator().map_err(|e| std::io::Error::other(e.to_string()))?;
+        let lock = if manage {
+            Some(SwitchLock::try_acquire(&state_file).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "another CouchMic instance manages the default microphone",
+                )
+            })?)
+        } else {
+            None
+        };
         let mut me = Self {
             target_filter: target_filter.to_string(),
             target: None,
             previous: None,
             state_file,
+            lock,
         };
-        me.recover_previous(&en);
+        if me.lock.is_some() {
+            me.recover_previous(&en);
+        }
         Ok(me)
     }
 
@@ -294,6 +344,15 @@ impl MicSwitch {
     pub fn activate(&mut self) {
         if self.previous.is_some() {
             return;
+        }
+        if self.lock.is_none() {
+            self.lock = SwitchLock::try_acquire(&self.state_file);
+            if self.lock.is_none() {
+                tracing::warn!(
+                    "another CouchMic instance manages the default microphone, not switching"
+                );
+                return;
+            }
         }
         let _com = ComGuard::new();
         let en = match enumerator() {
@@ -401,6 +460,24 @@ impl MicSwitch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_one_process_holds_the_switch_lock() {
+        let d = std::env::temp_dir().join(format!("couchmic-lock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let state = d.join("previous-mic.txt");
+        let first = SwitchLock::try_acquire(&state).expect("first lock");
+        assert!(
+            SwitchLock::try_acquire(&state).is_none(),
+            "second holder refused"
+        );
+        drop(first);
+        assert!(
+            SwitchLock::try_acquire(&state).is_some(),
+            "free again after release"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn state_file_roundtrip_with_target() {
