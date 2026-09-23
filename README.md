@@ -76,8 +76,8 @@ The binary is not code-signed yet, so Windows SmartScreen may warn on first star
 - The **Advanced** section on the page shows path, latency, buffer, loss and underruns.
 - Test without speaking: `https://<pc>.<tailnet>.ts.net/?tone=1` sends a 440 Hz tone.
 - Tray menu: status, "Switch default microphone automatically" (on/off), open web page, open log
-  folder, quit. After "Quit" the watchdog leaves glass-mic stopped until the next Windows start
-  (or until you start `glass-mic.exe` by hand).
+  folder, quit. After "Quit" the watchdog leaves glass-mic stopped until you sign out, restart
+  or shut down Windows (or until you start `glass-mic.exe` by hand).
 
 ## Command line
 

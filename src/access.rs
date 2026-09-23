@@ -210,7 +210,7 @@ impl AllowList {
             port,
             tailscale: tailscale.map(|t| TailscaleSelf {
                 host: t.host.to_ascii_lowercase(),
-                login: t.login.map(|l| l.to_ascii_lowercase()),
+                login: t.login,
             }),
             extra,
             allow_any_tailnet_user,
@@ -251,6 +251,7 @@ impl AllowList {
     }
 
     fn tailnet_user_ok(&self, login: &Hdr) -> bool {
+        // Tailscale sends non-ASCII logins RFC 2047 Q-encoded (Go mime.QEncoding).
         if self.allow_any_tailnet_user {
             return true;
         }
@@ -258,7 +259,9 @@ impl AllowList {
             return false;
         };
         match login {
-            Hdr::Value(v) => v.trim().to_ascii_lowercase() == *owner,
+            Hdr::Value(v) => {
+                decode_q_words(v.trim()).is_some_and(|l| l.to_lowercase() == owner.to_lowercase())
+            }
             _ => false,
         }
     }
@@ -296,6 +299,42 @@ impl AllowList {
     fn identity_incomplete(&self) -> bool {
         self.tailscale.as_ref().is_none_or(|t| t.login.is_none())
     }
+}
+
+/// Decodes a header value that may consist of RFC 2047 "Q" encoded words
+/// (`=?utf-8?q?j=C3=BCrgen@example.com?=`, possibly several separated by whitespace), as Go's
+/// `mime.QEncoding.Encode` produces them. Plain values are returned unchanged. None if the
+/// value is malformed, so a broken header can never match.
+fn decode_q_words(v: &str) -> Option<String> {
+    if !v.starts_with("=?") {
+        return Some(v.to_string());
+    }
+    let mut bytes = Vec::new();
+    for word in v.split_whitespace() {
+        let inner = word.strip_prefix("=?")?.strip_suffix("?=")?;
+        let mut parts = inner.splitn(3, '?');
+        let charset = parts.next()?;
+        let enc = parts.next()?;
+        let text = parts.next()?;
+        if !charset.eq_ignore_ascii_case("utf-8") || !enc.eq_ignore_ascii_case("q") {
+            return None;
+        }
+        let raw = text.as_bytes();
+        let mut i = 0;
+        while i < raw.len() {
+            match raw[i] {
+                b'_' => bytes.push(b' '),
+                b'=' => {
+                    let hex = std::str::from_utf8(raw.get(i + 1..i + 3)?).ok()?;
+                    bytes.push(u8::from_str_radix(hex, 16).ok()?);
+                    i += 2;
+                }
+                b => bytes.push(b),
+            }
+            i += 1;
+        }
+    }
+    String::from_utf8(bytes).ok()
 }
 
 fn clip(s: &str) -> String {
@@ -403,7 +442,7 @@ pub async fn guard(State(access): State<Arc<Access>>, req: Request, next: Next) 
             let mut list = access.list.lock().unwrap();
             list.tailscale = Some(TailscaleSelf {
                 host: ts.host.to_ascii_lowercase(),
-                login: ts.login.map(|l| l.to_ascii_lowercase()),
+                login: ts.login,
             });
             drop(list);
             verdict = access.check(&info);
@@ -684,6 +723,50 @@ mod tests {
         );
         assert_eq!(split_host_port("host:abc"), None);
         assert_eq!(split_host_port(""), None);
+    }
+
+    #[test]
+    fn q_encoded_logins() {
+        assert_eq!(
+            decode_q_words("me@example.com").as_deref(),
+            Some("me@example.com")
+        );
+        assert_eq!(
+            decode_q_words("=?utf-8?q?j=C3=BCrgen@example.com?=").as_deref(),
+            Some("j\u{fc}rgen@example.com")
+        );
+        assert_eq!(
+            decode_q_words("=?utf-8?q?j=C3=BC?= =?utf-8?q?rgen@example.com?=").as_deref(),
+            Some("j\u{fc}rgen@example.com"),
+            "split into several words"
+        );
+        assert_eq!(decode_q_words("=?utf-8?q?bad=Z?="), None);
+        assert_eq!(decode_q_words("=?iso-8859-1?q?x?="), None);
+        let l = AllowList::new(
+            8321,
+            Some(TailscaleSelf {
+                host: TS.into(),
+                login: Some("J\u{dc}rgen@example.com".into()),
+            }),
+            &[],
+            false,
+        );
+        let own = format!("https://{TS}");
+        assert_eq!(
+            l.check(&via_serve(
+                Some(&own),
+                Some("=?utf-8?q?j=C3=BCrgen@example.com?=")
+            )),
+            Ok(()),
+            "non-ASCII owner gets in"
+        );
+        assert_eq!(
+            l.check(&via_serve(
+                Some(&own),
+                Some("=?utf-8?q?j=C3=BCrgen@evil.com?=")
+            )),
+            Err(Denied::TailnetUser)
+        );
     }
 
     #[test]

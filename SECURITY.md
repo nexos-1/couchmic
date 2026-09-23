@@ -51,6 +51,13 @@ Out of scope: malware already running on the PC as your user (it can use the mic
 VB-CABLE directly anyway), and people you deliberately let in with `--allow-any-tailnet-user`
 or `--allow-origin`.
 
+Local connections are trusted: a request that reaches 127.0.0.1:8321 directly (not through
+`tailscale serve`) is only checked for Host, Origin and `Sec-Fetch-Site`. Do not forward the
+port with raw TCP tools (`tailscale serve --tcp`, `netsh interface portproxy`, `ssh -L`): such a
+forward arrives as a local connection and skips the Tailscale user check. `install.ps1` refuses
+to install while `tailscale serve` has a raw TCP forward to the glass-mic port. Other Windows
+users signed in on the same PC can reach the local port as well.
+
 ## Supply chain
 
 - Dependencies are pinned in `Cargo.lock`; new versions are only adopted once they are at least

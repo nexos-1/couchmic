@@ -3,9 +3,11 @@ name: release
 # A tag v<version> builds the release zip and creates a draft GitHub release (review and publish
 # it by hand). "Run workflow" builds the same zip as an artifact only.
 #
-# Two jobs: "build" runs third-party build code (build scripts, proc macros, cargo-about) with a
-# read-only token and no cache, so a compromised dependency cannot touch the repository or the
-# release. Only "publish", which runs no third-party build code, may write.
+# Jobs: "build" runs third-party build code (build scripts, proc macros, cargo-about) with a
+# read-only token and no cache, so a compromised dependency cannot push to the repository or
+# edit releases. It could still tamper with the files it builds; the draft release therefore
+# has to be reviewed before it is published. "attest" (build provenance, public repositories)
+# and "publish" (draft release) run no third-party build code.
 on:
   push:
     tags: ["v*"]
@@ -102,8 +104,9 @@ jobs:
             dist/unpacked/glass-mic.exe
 
   publish:
-    if: github.ref_type == 'tag'
-    needs: build
+    # Wait for the attestation; a skipped one (private repository) is fine, a failed one is not.
+    if: ${{ always() && github.ref_type == 'tag' && needs.build.result == 'success' && (needs.attest.result == 'success' || needs.attest.result == 'skipped') }}
+    needs: [build, attest]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -116,7 +119,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NAME: ${{ needs.build.outputs.name }}
+          ATTESTED: ${{ needs.attest.result == 'success' }}
         run: |
-          notes="$(printf 'See CHANGELOG.md. Verify: gh attestation verify glass-mic.exe -R %s\n\nSHA-256:\n\n```\n%s\n```\n' "$GITHUB_REPOSITORY" "$(cat "dist/$NAME.sha256")")"
+          verify=""
+          if [ "$ATTESTED" = "true" ]; then
+            verify="Verify the build: gh attestation verify glass-mic.exe -R $GITHUB_REPOSITORY"
+          fi
+          notes="$(printf 'See CHANGELOG.md. %s\n\nSHA-256:\n\n```\n%s\n```\n' "$verify" "$(cat "dist/$NAME.sha256")")"
           gh release create "$GITHUB_REF_NAME" "dist/$NAME.zip" "dist/$NAME.sha256" \
             --repo "$GITHUB_REPOSITORY" --draft --title "glass-mic $GITHUB_REF_NAME" --notes "$notes"

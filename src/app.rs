@@ -65,9 +65,10 @@ const CLIENT_LOG_BURST: u32 = 20;
 const CLIENT_LOG_WINDOW: Duration = Duration::from_secs(10);
 /// Client-supplied strings are cut to this many characters in the log.
 const CLIENT_FIELD_MAX: usize = 200;
-/// Written when the user quits from the tray; the watchdog then leaves glass-mic stopped until
-/// the next Windows start or a manual start.
-const STOP_MARKER: &str = "stopped-by-user";
+/// Volatile registry key (HKCU, gone after logoff, restart and shutdown, also with Fast
+/// Startup) set when the user quits from the tray; the watchdog then leaves glass-mic stopped.
+const STOP_KEY_PARENT: &str = r"Software\GlassMic";
+const STOP_KEY: &str = r"Software\GlassMic\StoppedByUser";
 
 const INDEX_HTML: &str = include_str!("web/index.html");
 const MANIFEST: &str = include_str!("web/manifest.webmanifest");
@@ -536,7 +537,10 @@ async fn handle_control(
                     Some(serde_json::json!({ "type": "answer", "sdp": answer }).to_string())
                 }
                 Err(e) => {
-                    tracing::warn!("rtc: offer rejected: {e}");
+                    if log_budget.allow() {
+                        let short: String = e.chars().take(CLIENT_FIELD_MAX).collect();
+                        tracing::warn!(error = %short.escape_debug(), "rtc: offer rejected");
+                    }
                     Some(serde_json::json!({ "type": "error", "message": e }).to_string())
                 }
             }
@@ -550,7 +554,9 @@ async fn handle_control(
             None
         }
         Some("hello") => {
-            tracing::info!(client = %client_fields(v), "client hello");
+            if log_budget.allow() {
+                tracing::info!(client = %client_fields(v), "client hello");
+            }
             Some(
                 serde_json::json!({
                     "type": "welcome",
@@ -805,12 +811,8 @@ async fn command_loop(
             }
             TrayCommand::Quit => {
                 tracing::info!("quit from tray");
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                if let Err(e) = std::fs::write(data_dir().join(STOP_MARKER), now.to_string()) {
-                    tracing::warn!("cannot write stop marker: {e}");
+                if let Err(e) = set_stopped_by_user(true) {
+                    tracing::warn!("cannot set stop marker: {e}");
                 }
                 let _ = quit_tx.send(true);
             }
@@ -906,25 +908,80 @@ fn tailscale_self() -> Option<access::TailscaleSelf> {
     parse_tailscale_status(&out.stdout)
 }
 
-/// Seconds since the Unix epoch at which Windows started.
-fn boot_time_unix() -> u64 {
-    let uptime_ms = unsafe { windows::Win32::System::SystemInformation::GetTickCount64() };
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    now.saturating_sub(uptime_ms / 1000)
+fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-/// True if the user quit from the tray since the last Windows start.
+/// True if the user quit from the tray in this logon session (the volatile key exists).
 fn stopped_by_user() -> bool {
-    let Ok(text) = std::fs::read_to_string(data_dir().join(STOP_MARKER)) else {
-        return false;
+    use windows::core::PCWSTR;
+    use windows::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
     };
-    // A few seconds of tolerance for the uptime rounding.
-    text.trim()
-        .parse::<u64>()
-        .is_ok_and(|t| t + 5 >= boot_time_unix())
+    let path = wide(STOP_KEY);
+    let mut key = HKEY::default();
+    unsafe {
+        let found = RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            PCWSTR(path.as_ptr()),
+            None,
+            KEY_READ,
+            &mut key,
+        )
+        .is_ok();
+        if found {
+            let _ = RegCloseKey(key);
+        }
+        found
+    }
+}
+
+/// Sets or clears the volatile "stopped by user" key.
+fn set_stopped_by_user(on: bool) -> windows::core::Result<()> {
+    use windows::core::PCWSTR;
+    use windows::Win32::System::Registry::{
+        RegCloseKey, RegCreateKeyExW, RegDeleteKeyW, HKEY, HKEY_CURRENT_USER, KEY_WRITE,
+        REG_OPTION_NON_VOLATILE, REG_OPTION_VOLATILE,
+    };
+    unsafe {
+        if !on {
+            let path = wide(STOP_KEY);
+            let _ = RegDeleteKeyW(HKEY_CURRENT_USER, PCWSTR(path.as_ptr()));
+            return Ok(());
+        }
+        // A volatile key needs a non-volatile parent.
+        let mut parent = HKEY::default();
+        let parent_path = wide(STOP_KEY_PARENT);
+        RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            PCWSTR(parent_path.as_ptr()),
+            None,
+            PCWSTR::null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_WRITE,
+            None,
+            &mut parent,
+            None,
+        )
+        .ok()?;
+        let _ = RegCloseKey(parent);
+        let mut key = HKEY::default();
+        let path = wide(STOP_KEY);
+        RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            PCWSTR(path.as_ptr()),
+            None,
+            PCWSTR::null(),
+            REG_OPTION_VOLATILE,
+            KEY_WRITE,
+            None,
+            &mut key,
+            None,
+        )
+        .ok()?;
+        let _ = RegCloseKey(key);
+        Ok(())
+    }
 }
 
 /// True if stdout is a pipe or a file (redirected by the caller), not a console or nothing.
@@ -992,8 +1049,8 @@ pub async fn main() {
         return;
     }
     if !cli.watchdog {
-        // A manual start (double click, or the task run by hand without --watchdog) clears it.
-        let _ = std::fs::remove_file(data_dir().join(STOP_MARKER));
+        // A manual start (double click, or the exe run by hand without --watchdog) clears it.
+        let _ = set_stopped_by_user(false);
     }
     let addr = format!("127.0.0.1:{}", cli.port);
     let listener = match tokio::net::TcpListener::bind(&addr).await {
@@ -1211,6 +1268,19 @@ mod tests {
         assert!(f.contains("running=true") && f.contains("code=1006"));
         let ua = f.split("ua=").nth(1).unwrap().split(' ').next().unwrap();
         assert_eq!(ua.len(), CLIENT_FIELD_MAX);
+    }
+
+    #[test]
+    fn stop_marker_roundtrip() {
+        // Uses the real key; leave it as it was found.
+        let before = stopped_by_user();
+        set_stopped_by_user(true).unwrap();
+        assert!(stopped_by_user());
+        set_stopped_by_user(false).unwrap();
+        assert!(!stopped_by_user());
+        if before {
+            set_stopped_by_user(true).unwrap();
+        }
     }
 
     #[test]

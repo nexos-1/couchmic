@@ -16,7 +16,9 @@ First public version.
   `Sec-Fetch-Site` and frame headers, only the PC's own Tailscale user through `tailscale serve`
   (`--allow-any-tailnet-user` to widen), Tailscale Funnel always rejected.
 - Resource limits: 64 KiB messages, 4 connections, 100 ms PCM blocks, idle timeout, rate-limited
-  and sanitised client logs; firewall rule limited to Tailscale addresses.
+  and sanitised client logs; firewall rule limited to the Tailscale interface and Tailscale
+  addresses.
+- Quit in the tray keeps the watchdog from restarting glass-mic until the next Windows sign-in.
 - One active audio source at a time; the newest sender takes over.
 - Tray icon, Windows notifications under their own app id, German and English UI.
 - Log file with rotation at 5 MB; stats are only logged while a client is connected.

@@ -399,20 +399,32 @@ function liveText() { return path === 'WebRTC' ? L.liveRtc : L.livePcm; }
 // ---------- Signaling / control channel ----------
 function openWs() {
   return new Promise((resolve) => {
-    ws = new WebSocket(wsUrl()); ws.binaryType = 'arraybuffer';
-    ws.onopen = () => { wsReady = true; $('ws').textContent = L.wsConnected; ws.send(JSON.stringify({ type: 'hello', ua: navigator.userAgent, standalone: isStandalone() })); flushTel(); resolve(true); };
-    ws.onmessage = (ev) => { if (typeof ev.data !== 'string') return; let m; try { m = JSON.parse(ev.data); } catch { return; }
+    // Close the previous socket first: a forgotten one would stay open silently until the PC
+    // closes it as idle, and its close event would then tear down the healthy connection.
+    // A caller still waiting for the old socket gets false instead of waiting forever.
+    const old = ws;
+    if (old) { old.onopen = old.onclose = old.onerror = old.onmessage = null; if (old._settle) old._settle(false); try { old.close(); } catch {} }
+    const sock = new WebSocket(wsUrl()); ws = sock; sock.binaryType = 'arraybuffer'; sock._settle = resolve;
+    sock.onopen = () => { wsReady = true; $('ws').textContent = L.wsConnected; sock.send(JSON.stringify({ type: 'hello', ua: navigator.userAgent, standalone: isStandalone() })); flushTel(); resolve(true); };
+    sock.onmessage = (ev) => { if (typeof ev.data !== 'string') return; let m; try { m = JSON.parse(ev.data); } catch { return; }
       if (m.type === 'welcome') { $('host').textContent = (m.host || 'PC') + ' · ' + location.host; }
       if (m.type === 'pong') { latency = (performance.now() - m.t); $('lat').textContent = latency.toFixed(0) + L.rtt; }
       if (m.type === 'answer' && pendingOffer) { pendingOffer(m.sdp); pendingOffer = null; }
       if (m.type === 'error') { $('err').textContent = L.pcSays + m.message; if (pendingOffer) { pendingOffer(null); pendingOffer = null; } }
     };
-    ws.onclose = (e) => { wsReady = false; $('ws').textContent = L.wsClosed; tel('ws-close', { code: e.code, reason: e.reason }); if (running) { setStatus(L.lost, L.retrying, 'busy'); setTimeout(() => { if (running) reconnect(); }, 1000); } };
-    ws.onerror = () => { $('ws').textContent = L.wsError; resolve(false); };
+    sock.onclose = (e) => { if (sock !== ws) return; wsReady = false; $('ws').textContent = L.wsClosed; tel('ws-close', { code: e.code, reason: e.reason }); if (running) { setStatus(L.lost, L.retrying, 'busy'); setTimeout(() => { if (running) reconnect(); }, 1000); } };
+    sock.onerror = () => { if (sock !== ws) return; $('ws').textContent = L.wsError; resolve(false); };
   });
 }
 
+// One reconnect at a time: "disconnected" and "failed" can both fire for the same outage.
+let reconnecting = false;
 async function reconnect() {
+  if (reconnecting) return;
+  reconnecting = true;
+  try { await reconnectInner(); } finally { reconnecting = false; }
+}
+async function reconnectInner() {
   const ok = await openWs();
   if (!ok || !running) return;
   if (pc) { try { pc.close(); } catch {} pc = null; }
