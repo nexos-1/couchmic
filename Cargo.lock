@@ -684,6 +684,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "couchmic"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "clap",
+ "cpal",
+ "muda",
+ "opus",
+ "rtc",
+ "rubato",
+ "serde_json",
+ "tauri-winrt-notification",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "tray-icon",
+ "webrtc",
+ "windows",
+ "windows-core",
+]
+
+[[package]]
 name = "cpal"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1318,29 +1341,6 @@ dependencies = [
  "libc",
  "system-deps",
  "winapi",
-]
-
-[[package]]
-name = "couchmic"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "axum",
- "clap",
- "cpal",
- "muda",
- "opus",
- "rtc",
- "rubato",
- "serde_json",
- "tauri-winrt-notification",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "tray-icon",
- "webrtc",
- "windows",
- "windows-core",
 ]
 
 [[package]]
@@ -2803,9 +2803,9 @@ dependencies = [
 
 [[package]]
 name = "rtc"
-version = "0.20.3"
+version = "0.20.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e55da8e478486106f04db1ccba177ae3260fb12899982cd5cddf2ac0e1cdcfe9"
+checksum = "66355ae7cad547376873a2ee7968eee1e3727492a241c05bf511b01db4cef077"
 dependencies = [
  "bytes",
  "hex",
