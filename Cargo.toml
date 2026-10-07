@@ -34,7 +34,7 @@ rubato = "5.0.0"
 # cpal 0.18.2 (2026-08-16)
 cpal = "0.18.2"
 # WebRTC receiver (Opus audio track from Safari). webrtc/rtc pinned to 0.20.3 (2026-08-16).
-webrtc = "=0.20.3"
+webrtc = "=0.21.0"
 rtc = "=0.20.3"
 # libopus bindings (opus 0.4.0, 2026-08-23; libopus is BSD-3-Clause), needs CMake to build
 opus = "0.4.0"
