@@ -40,7 +40,7 @@ rtc = "=0.20.3"
 opus = "0.4.0"
 # Tray, menu, toasts (0.24.2 / 0.19.3 / 0.8.1)
 tray-icon = "0.24.2"
-muda = "0.19.3"
+muda = "0.21.2"
 tauri-winrt-notification = "0.8.1"
 # Direct COM calls (IPolicyConfig, IMMDeviceEnumerator), registry for the toast app id,
 # UI language; 0.62.2 (2025-10-06)
