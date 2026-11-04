@@ -25,7 +25,7 @@ jobs:
         with:
           toolchain: 1.95.0
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2, 2026-08-06
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2, 2026-08-06
       # CMake (for libopus) is preinstalled on the Windows runners.
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets --locked
@@ -51,7 +51,7 @@ jobs:
         with:
           toolchain: 1.95.0
           components: clippy
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2, 2026-08-06
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2, 2026-08-06
       - run: cargo clippy --all-targets --locked
       - run: cargo test --locked
 
